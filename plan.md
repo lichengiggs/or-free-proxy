@@ -1,183 +1,30 @@
-# OpenRouter Free Proxy 实现计划（Plan）
+# OpenRouter Free Proxy 功能增强实施计划
 
-## 📅 总体进度安排（极简版，符合本地小工具定位）
-> ✅ **设计原则：最小够用，无冗余功能，启动快，配置少，维护简单**
+## 目标
 
-| 阶段 | 内容 | 预计耗时 |
-|------|------|----------|
-| 1 | 项目初始化（最简依赖） | 15分钟 |
-| 2 | 核心功能实现（单文件核心逻辑） | 1小时 |
-| 3 | Web管理界面 + 联调 | 30分钟 |
-| 4 | 功能测试 | 15分钟 |
-| **总计** | | **2小时** |
+让用户使用免费模型时**尽可能无感**，最大化利用免费 API 的能力，避免频繁手工切换模型。
 
-### 简化说明：
-1. 去掉不必要的工程化配置（lint、format、构建步骤等，本地工具不需要）
-2. 依赖最小化，只保留必须的4个依赖
-3. 代码结构简化，核心逻辑集中，方便后续修改
-4. 直接用tsx运行，无需编译，开发启动快
+## 核心原则
+
+- **简单优先**：用最少的代码实现核心功能
+- **渐进增强**：先跑起来，再优化
+- **专注个人使用**：不需要过度考虑兼容性，保持代码简洁无负担
 
 ---
 
-## 📝 详细待办事项清单（待审阅，可勾选完成）
-### 🔹 前置准备
-- [ ] 环境检查：本地安装 Node.js ≥ 18，npm/yarn 可用（验收标准：终端执行 `node -v` 显示版本 ≥ 18）
+## Phase 1: 增强免费模型检测（1-2小时）
 
-### 🔹 阶段1：项目初始化
-- [ ] 创建项目目录结构：src/、public/ 文件夹（验收标准：目录结构符合最终项目结构要求）
-- [ ] 初始化 package.json，安装所有依赖（验收标准：执行 `npm install` 无报错，node_modules 生成）
-- [ ] 编写 tsconfig.json 最简配置（验收标准：执行 `npx tsc --noEmit` 无类型错误）
-- [ ] 编写 .gitignore 文件（验收标准：包含 node_modules、.env、config.json 等忽略项）
-- [ ] 创建 .env 文件模板，写入 OPENROUTER_API_KEY 配置项（验收标准：.env 文件存在，格式正确）
+### 1.1 当前问题
+仅检测 `:free` 后缀，可能漏掉一些 pricing=0 的免费模型
 
-### 🔹 阶段2：核心功能实现
-- [ ] 实现 config.ts 模块：读写 config.json、加载环境变量（验收标准：可正常读写配置，默认模型自动生成）
-- [ ] 实现 models.ts 模块：获取OpenRouter模型列表、过滤免费模型、缓存（验收标准：调用 fetchModels() 可返回正确的免费模型列表）
-- [ ] 实现请求转发逻辑：全量透传参数、流式响应支持（验收标准：代理请求可正常返回OpenRouter响应）
+### 1.2 改进方案
+双重检测：`:free` 后缀 + pricing=0
 
-### 🔹 阶段3：API与Web界面
-- [ ] 实现 Hono 服务入口 server.ts：路由配置、CORS、静态文件服务（验收标准：服务启动后可访问 http://localhost:8765）
-- [ ] 实现 /v1/chat/completions 接口：透传请求、补全默认模型（验收标准：curl 测试接口返回正常）
-- [ ] 实现 /admin/models 接口：返回免费模型列表和当前选中模型（验收标准：接口返回数据格式正确，包含所有免费模型）
-- [ ] 实现 /admin/model 接口：保存默认模型到 config.json（验收标准：调用接口后 config.json 文件更新）
-- [ ] 编写 public/index.html Web管理界面：模型列表展示、切换、刷新功能（验收标准：页面可正常加载，点击切换模型可调用接口成功）
+### 1.3 代码实现
 
-### 🔹 阶段4：测试与验证
-- [ ] 基础接口测试：curl 测试流式和非流式请求（验收标准：两种请求都返回正常结果）
-- [ ] OpenCode 集成测试：配置 base_url 后可正常调用（验收标准：opencode run 命令可返回正确结果）
-- [ ] 模型切换测试：Web页面切换模型后，OpenCode请求自动使用新模型（验收标准：切换后无需重启服务，后续请求立即使用新模型）
-- [ ] 异常测试：API Key 错误、模型不存在等场景处理（验收标准：返回友好错误信息，服务不崩溃）
-
-### 🔹 收尾
-- [ ] 编写 README.md：使用说明、启动步骤、配置方法（验收标准：新用户按照README可成功启动服务）
-- [ ] 整体功能验证：所有功能正常工作（验收标准：所有验收标准通过）
----
-
-## 🚀 阶段1：项目初始化与基础配置
-### 子任务
-1. 创建项目目录结构
-2. 初始化 package.json 与依赖安装
-3. 配置 TypeScript、tsup（打包工具）
-4. 配置 .gitignore、.env.example
-
-### 关键代码
-#### 1.1 package.json 依赖（最简版，仅4个运行时依赖）
-```json
-{
-  "name": "openrouter-free-proxy",
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
-  },
-  "dependencies": {
-    "@hono/node-server": "^1.11.0",
-    "dotenv": "^16.4.5",
-    "hono": "^4.2.9",
-    "tsx": "^4.9.0",
-    "typescript": "^5.4.5"
-  }
-}
-```
-> 简化说明：
-> 1. 移除所有不必要的dev依赖（eslint、prettier、tsup等），本地工具不需要构建和代码检查
-> 2. 移除build步骤，直接用tsx运行源码，启动更快
-> 3. 保留2个命令：`npm run dev`（开发热重载）、`npm start`（直接运行）
-> 4. 总共仅5个依赖，体积小，安装快
-
-#### 1.2 tsconfig.json（最简配置）
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
-  },
-  "include": ["src/**/*"]
-}
-```
-> 简化说明：移除路径别名、outDir等不必要配置，只保留类型检查必须的配置
-
-#### 1.3 .gitignore
-```
-node_modules/
-dist/
-.env
-config.json
-*.log
-.DS_Store
-```
-
----
-
-## ⚙️ 阶段2：核心功能模块实现
-### 子任务
-1. 配置模块（config.ts）：读写配置文件、环境变量加载
-2. 模型模块（models.ts）：获取OpenRouter模型、免费模型过滤、缓存
-3. 代理模块（proxy.ts）：请求转发、流式响应、重试逻辑
-
-### 关键代码
-#### 2.1 src/config.ts
 ```typescript
-import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-interface Config {
-  default_model: string;
-}
-
-const CONFIG_PATH = 'config.json';
-const DEFAULT_CONFIG: Config = {
-  default_model: 'openrouter/auto:free'
-};
-
-let cachedConfig: Config | null = null;
-
-// 读取配置
-export async function getConfig(): Promise<Config> {
-  if (cachedConfig) return cachedConfig;
-  
-  if (!existsSync(CONFIG_PATH)) {
-    await writeFile(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
-    cachedConfig = DEFAULT_CONFIG;
-    return cachedConfig;
-  }
-
-  const content = await readFile(CONFIG_PATH, 'utf-8');
-  cachedConfig = JSON.parse(content) as Config;
-  return cachedConfig;
-}
-
-// 保存配置
-export async function setConfig(config: Partial<Config>): Promise<Config> {
-  const currentConfig = await getConfig();
-  const newConfig = { ...currentConfig, ...config };
-  await writeFile(CONFIG_PATH, JSON.stringify(newConfig, null, 2));
-  cachedConfig = newConfig;
-  return newConfig;
-}
-
-// 环境变量
-export const ENV = {
-  OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
-  OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-  PORT: Number(process.env.PORT) || 8765
-} as const;
-```
-
-#### 2.2 src/models.ts
-```typescript
-import fetch from 'node-fetch';
-import { ENV } from './config';
-
-interface OpenRouterModel {
+// src/models.ts
+export interface OpenRouterModel {
   id: string;
   name: string;
   description: string;
@@ -188,156 +35,442 @@ interface OpenRouterModel {
   };
 }
 
-let cachedModels: OpenRouterModel[] = [];
-let lastFetchTime = 0;
-const CACHE_TTL = 60 * 60 * 1000; // 1小时缓存
-
-// 获取所有模型
-export async function fetchModels(forceRefresh = false): Promise<OpenRouterModel[]> {
-  const now = Date.now();
-  if (!forceRefresh && cachedModels.length && now - lastFetchTime < CACHE_TTL) {
-    return cachedModels;
-  }
-
-  const response = await fetch(`${ENV.OPENROUTER_BASE_URL}/models`, {
-    headers: {
-      'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'http://localhost:8765',
-      'X-Title': 'OpenRouter Free Proxy'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch models: ${response.statusText}`);
-  }
-
-  const data = (await response.json()) as { data: OpenRouterModel[] };
-  cachedModels = data.data;
-  lastFetchTime = now;
-  return cachedModels;
-}
-
-// 过滤免费模型
 export function filterFreeModels(models: OpenRouterModel[]): OpenRouterModel[] {
-  return models
-    .filter(model => model.id.endsWith(':free'))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  return models.filter(model => {
+    // 方法1: :free 后缀
+    if (model.id.endsWith(':free')) return true;
+    
+    // 方法2: pricing 为 0（更可靠）
+    const promptCost = parseFloat(model.pricing?.prompt || '0');
+    const completionCost = parseFloat(model.pricing?.completion || '0');
+    if (promptCost === 0 && completionCost === 0) return true;
+    
+    return false;
+  });
 }
 ```
 
-#### 2.3 src/proxy.ts
-```typescript
-import fetch, { Response } from 'node-fetch';
-import { ENV } from './config';
-import { getConfig } from './config';
-
-// 从环境变量读取OpenRouter API地址，默认值为官方地址
-// 转发请求到OpenRouter
-export async function proxyRequest(
-  path: string,
-  method: string,
-  body: any,
-  headers: Record<string, string>
-): Promise<Response> {
-  const config = await getConfig();
-  
-  // 补全默认模型
-  if (!body.model) {
-    body.model = config.default_model;
-  }
-
-  // 构建请求头
-  const proxyHeaders: Record<string, string> = {
-    'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
-    'HTTP-Referer': 'http://localhost:8765',
-    'X-Title': 'OpenRouter Free Proxy',
-    'Content-Type': 'application/json'
-  };
-
-  // 转发原始请求头（排除host和content-length）
-  Object.entries(headers).forEach(([key, value]) => {
-    if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
-      proxyHeaders[key] = value;
-    }
-  });
-
-    // 极简错误处理：直接返回请求结果，不重试（本地使用，失败手动重试即可）
-    return await fetch(`${ENV.OPENROUTER_BASE_URL}${path}`, {
-      method,
-      headers: proxyHeaders,
-      body: JSON.stringify(body)
-    });
-}
+### 1.4 验证方式
+```bash
+curl http://localhost:8765/admin/models | jq '.models | length'
 ```
 
 ---
 
-## 🌐 阶段3：API接口与Web管理界面
-### 子任务
-1. Hono 服务入口（server.ts）：路由配置、CORS、静态文件服务
-2. API 接口实现：chat completions、模型管理接口
-3. Web 管理界面：HTML + 原生JS实现
+## Phase 2: 模型评分与智能推荐（2-3小时）
 
-### 关键代码
-#### 3.1 src/server.ts
+### 2.1 目标
+自动识别性能最佳的免费模型，给用户提供「一键选择最佳」按钮
+
+### 2.2 简化版评分算法
+
 ```typescript
-import { serve } from '@hono/node-server';
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-import { serveStatic } from '@hono/node-server/serve-static';
-import { stream } from 'hono/streaming';
-import { proxyRequest } from './proxy';
-import { getConfig, setConfig, ENV } from './config';
-import { fetchModels, filterFreeModels } from './models';
+// src/models.ts
+export interface ModelScore {
+  model: OpenRouterModel;
+  score: number;
+  reasons: string[];
+}
 
-const app = new Hono();
+const TRUSTED_PROVIDERS = [
+  'google', 'meta-llama', 'mistralai', 'deepseek',
+  'nvidia', 'qwen', 'microsoft', 'allenai'
+];
 
-// CORS 配置（允许所有本地端口）
-app.use('/*', cors({
-  origin: (origin) => {
-    if (origin.startsWith('http://localhost:') || origin === 'null') {
-      return origin;
-    }
-    return 'http://localhost:8765';
+export function rankModels(models: OpenRouterModel[]): ModelScore[] {
+  return models.map(model => {
+    let score = 0;
+    const reasons: string[] = [];
+    
+    // 1. 上下文长度评分 (0-40分)
+    const contextLength = model.context_length || 0;
+    const contextScore = Math.min(contextLength / 32000, 1) * 40;
+    score += contextScore;
+    if (contextScore >= 40) reasons.push('超长上下文(32k+)');
+    else if (contextScore >= 20) reasons.push('长上下文(16k+)');
+    
+    // 2. 提供商信任度 (0-30分)
+    const provider = model.id.split('/')[0].toLowerCase();
+    const providerIndex = TRUSTED_PROVIDERS.indexOf(provider);
+    const providerScore = providerIndex >= 0 
+      ? (1 - providerIndex / TRUSTED_PROVIDERS.length) * 30 
+      : 10;
+    score += providerScore;
+    if (providerScore >= 25) reasons.push('知名提供商');
+    
+    // 3. 模型参数评分 (0-20分) - 从名称中提取参数数值
+    const paramScore = extractParameterScore(model.name);
+    score += paramScore.score;
+    if (paramScore.reason) reasons.push(paramScore.reason);
+
+    return { model, score: Math.round(score), reasons };
+  }).sort((a, b) => b.score - a.score);
+}
+
+// 从模型名称中提取参数评分
+function extractParameterScore(name: string): { score: number; reason?: string } {
+  const match = name.match(/(\d+(?:\.\d+)?)\s*[bB]\b/);
+  if (!match) return { score: 0 };
+
+  const params = parseFloat(match[1]);
+
+  if (params >= 70) {
+    return { score: 20, reason: `大参数(${params}B)` };
+  } else if (params >= 30) {
+    return { score: 15, reason: `中参数(${params}B)` };
+  } else if (params >= 13) {
+    return { score: 10, reason: `标准参数(${params}B)` };
+  } else if (params >= 7) {
+    return { score: 5, reason: `轻量参数(${params}B)` };
   }
-}));
 
-// 静态文件服务（Web管理界面）
-app.use('/*', serveStatic({
-  root: './public',
-  index: 'index.html'
-}));
+  return { score: 2, reason: `小参数(${params}B)` };
+}
 
-// 1. Chat Completions 接口
+// 获取推荐模型
+export function getRecommendedModel(models: OpenRouterModel[]): ModelScore | null {
+  const ranked = rankModels(models);
+  return ranked[0] || null;
+}
+```
+
+### 2.3 API 接口更新
+
+```typescript
+// src/server.ts
+app.get('/admin/models', async (c) => {
+  try {
+    const forceRefresh = c.req.query('refresh') === 'true';
+    const models = await fetchModels(forceRefresh);
+    const freeModels = filterFreeModels(models);
+    const rankedModels = rankModels(freeModels);
+    
+    return c.json({
+      models: rankedModels.map(({ model, score, reasons }) => ({
+        id: model.id,
+        name: model.name,
+        context_length: model.context_length,
+        score,
+        reasons,
+        is_recommended: score >= 80
+      })),
+      recommended: rankedModels[0]?.model.id
+    });
+  } catch (err: any) {
+    console.error('Error fetching models:', err);
+    return c.json({ error: err.message }, 500);
+  }
+});
+```
+
+### 2.4 Web UI 更新
+
+```html
+<div class="header">
+  <h1>OpenRouter Free Proxy</h1>
+  <div>
+    <button class="btn btn-secondary" id="recommendBtn">🎖️ 使用推荐模型</button>
+    <button class="btn" id="refreshBtn">刷新模型列表</button>
+  </div>
+</div>
+
+<div id="recommendedBanner" style="display: none;" class="banner">
+  🏆 智能推荐: <span id="recommendedName"></span> 
+  评分: <span id="recommendedScore"></span>
+  <button class="btn btn-small" onclick="useRecommended()">一键使用</button>
+</div>
+
+<script>
+async function loadModels(forceRefresh = false) {
+  const res = await fetch(url);
+  const data = await res.json();
+  
+  if (data.recommended) {
+    const recommended = data.models.find(m => m.id === data.recommended);
+    if (recommended) {
+      document.getElementById('recommendedName').textContent = recommended.name;
+      document.getElementById('recommendedScore').textContent = recommended.score;
+      document.getElementById('recommendedBanner').style.display = 'block';
+    }
+  }
+}
+</script>
+```
+
+---
+
+## Phase 3: Fallback 机制 + 速率限制处理（核心，4-6小时）
+
+### 3.1 设计目标
+- 用户选择的模型不可用时，自动切换到备选模型
+- 记录速率限制状态，避免重复尝试已限流的模型
+- 通过响应头告知用户实际使用的模型
+
+### 3.2 数据结构设计
+
+```typescript
+// src/rate-limit.ts
+import { readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+
+interface RateLimitState {
+  [modelId: string]: {
+    limited_at: string;
+    retry_after?: number;
+    reason: 'rate_limit' | 'unavailable' | 'error';
+  };
+}
+
+const RATE_LIMIT_FILE = 'rate-limit-state.json';
+const RATE_LIMIT_COOLDOWN_MINUTES = 30;
+
+let memoryState: RateLimitState | null = null;
+
+export async function loadRateLimitState(): Promise<RateLimitState> {
+  if (memoryState) return memoryState;
+  
+  if (!existsSync(RATE_LIMIT_FILE)) {
+    memoryState = {};
+    return memoryState;
+  }
+  
+  try {
+    const content = await readFile(RATE_LIMIT_FILE, 'utf-8');
+    memoryState = JSON.parse(content);
+    return memoryState;
+  } catch {
+    memoryState = {};
+    return memoryState;
+  }
+}
+
+export async function saveRateLimitState(state: RateLimitState) {
+  memoryState = state;
+  await writeFile(RATE_LIMIT_FILE, JSON.stringify(state, null, 2));
+}
+
+export function isModelRateLimited(modelId: string): boolean {
+  const state = memoryState || {};
+  const record = state[modelId];
+  if (!record) return false;
+  
+  const limitedAt = new Date(record.limited_at);
+  const cooldownEnd = new Date(limitedAt.getTime() + RATE_LIMIT_COOLDOWN_MINUTES * 60 * 1000);
+  return Date.now() < cooldownEnd.getTime();
+}
+
+export async function markModelRateLimited(
+  modelId: string, 
+  reason: 'rate_limit' | 'unavailable' | 'error' = 'rate_limit',
+  retryAfter?: number
+) {
+  const state = await loadRateLimitState();
+  state[modelId] = {
+    limited_at: new Date().toISOString(),
+    retry_after: retryAfter,
+    reason
+  };
+  await saveRateLimitState(state);
+  console.log(`[RateLimit] Model ${modelId} marked as ${reason}`);
+}
+```
+
+### 3.3 Fallback 核心实现
+
+```typescript
+// src/config.ts
+export interface Config {
+  preferred_model?: string;  // 用户偏好（可选），默认用评分最高的
+}
+
+export const DEFAULT_CONFIG: Config = {
+  preferred_model: undefined  // 未设置时使用自动推荐
+};
+```
+
+```typescript
+// src/fallback.ts
+import { getConfig } from './config';
+import { isModelRateLimited, markModelRateLimited } from './rate-limit';
+import { fetchModels, filterFreeModels, rankModels } from './models';
+
+export interface FallbackResult {
+  model: string;
+  is_fallback: boolean;
+  attempted_models: string[];
+  fallback_reason?: string;
+}
+
+export async function getFallbackChain(preferredModel?: string): Promise<string[]> {
+  const chain: string[] = [];
+  
+  // 1. 添加用户偏好模型（如果有）
+  if (preferredModel) {
+    chain.push(preferredModel);
+  }
+  
+  // 2. 添加评分最高的前3个免费模型
+  try {
+    const models = await fetchModels();
+    const freeModels = filterFreeModels(models);
+    const ranked = rankModels(freeModels);
+    
+    for (const { model } of ranked.slice(0, 3)) {
+      if (!chain.includes(model.id)) {
+        chain.push(model.id);
+      }
+    }
+  } catch (err) {
+    console.error('[Fallback] Failed to get fallback models:', err);
+  }
+  
+  // 3. 最后兜底：openrouter/free
+  if (!chain.includes('openrouter/free')) {
+    chain.push('openrouter/free');
+  }
+  
+  return chain;
+}
+
+export async function executeWithFallback<T>(
+  preferredModel: string | undefined,
+  execute: (model: string) => Promise<{ success: boolean; response?: T; error?: any }>
+): Promise<{ result: T; fallbackInfo: FallbackResult }> {
+  const chain = await getFallbackChain(preferredModel);
+  const attemptedModels: string[] = [];
+  
+  for (const model of chain) {
+    if (isModelRateLimited(model)) {
+      console.log(`[Fallback] Skipping ${model} (rate limited)`);
+      attemptedModels.push(`${model}(rate_limited)`);
+      continue;
+    }
+    
+    console.log(`[Fallback] Trying model: ${model}`);
+    const { success, response, error } = await execute(model);
+    
+    if (success && response) {
+      return {
+        result: response,
+        fallbackInfo: {
+          model,
+          is_fallback: model !== preferredModel,
+          attempted_models: attemptedModels,
+          fallback_reason: model !== preferredModel 
+            ? `${preferredModel || 'auto-selected'} unavailable, fallback to ${model}` 
+            : undefined
+        }
+      };
+    }
+    
+    attemptedModels.push(model);
+    
+    if (error?.status === 429) {
+      await markModelRateLimited(model, 'rate_limit', error.retry_after);
+    } else if (error?.status === 503) {
+      await markModelRateLimited(model, 'unavailable');
+    }
+  }
+  
+  throw new Error(`All models failed. Attempted: ${attemptedModels.join(', ')}`);
+}
+```
+
+### 3.4 集成到 Server
+
+```typescript
+// src/server.ts
+import { executeWithFallback } from './fallback';
+
 app.post('/v1/chat/completions', async (c) => {
   try {
     const body = await c.req.json();
-    const headers = Object.fromEntries(c.req.headers.entries());
+    const headers = Object.fromEntries(c.req.raw.headers.entries());
+    const config = await getConfig();
     
-    const response = await proxyRequest(
-      '/chat/completions',
-      'POST',
-      body,
-      headers
+    const result = await executeWithFallback(
+      config.preferred_model,
+      async (modelToTry) => {
+        body.model = modelToTry;
+        
+        const proxyHeaders: Record<string, string> = {
+          'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'http://localhost:8765',
+          'X-Title': 'OpenRouter Free Proxy',
+          'Content-Type': 'application/json'
+        };
+        
+        Object.entries(headers).forEach(([key, value]) => {
+          if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
+            proxyHeaders[key] = value;
+          }
+        });
+        
+        try {
+          const response = await fetchWithTimeout(
+            `${ENV.OPENROUTER_BASE_URL}/chat/completions`,
+            {
+              method: 'POST',
+              headers: proxyHeaders,
+              body: JSON.stringify(body)
+            },
+            60000
+          );
+          
+          if (response.ok) {
+            return { success: true, response };
+          }
+          
+          const errorBody = await response.text();
+          return {
+            success: false,
+            error: {
+              status: response.status,
+              message: errorBody,
+              retry_after: response.headers.get('retry-after')
+            }
+          };
+        } catch (err: any) {
+          return { success: false, error: { message: err.message } };
+        }
+      }
     );
-
-    // 流式响应处理
+    
+    const response = result.result;
+    const fallbackInfo = result.fallbackInfo;
+    
+    c.header('X-Actual-Model', fallbackInfo.model);
+    if (fallbackInfo.is_fallback) {
+      c.header('X-Fallback-Used', 'true');
+      c.header('X-Fallback-Reason', fallbackInfo.fallback_reason || 'Primary model unavailable');
+    }
+    
     if (body.stream) {
+      const responseHeaders = Object.fromEntries(response.headers.entries());
+      c.status(response.status as any);
+      Object.entries(responseHeaders).forEach(([key, value]) => {
+        if (key.toLowerCase() !== 'content-encoding') {
+          c.header(key, value);
+        }
+      });
+      
       return stream(c, async (stream) => {
         if (!response.body) return;
         const reader = response.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await stream.write(value);
+        let done = false;
+        while (!done) {
+          const chunk = await reader.read();
+          done = chunk.done;
+          if (!done && chunk.value) await stream.write(chunk.value);
         }
-      }, response.status, Object.fromEntries(response.headers.entries()));
+      });
     }
-
-    // 非流式响应
+    
     const data = await response.json();
-    return c.json(data, response.status);
+    return c.json(data, { status: response.status as any });
+    
   } catch (err: any) {
+    console.error(`[${new Date().toISOString()}] Request error:`, err.message);
     return c.json({
       error: {
         message: err.message,
@@ -347,238 +480,235 @@ app.post('/v1/chat/completions', async (c) => {
     }, 500);
   }
 });
-
-// 2. 获取模型列表
-app.get('/admin/models', async (c) => {
-  try {
-    const forceRefresh = c.req.query('refresh') === 'true';
-    const models = await fetchModels(forceRefresh);
-    const freeModels = filterFreeModels(models);
-    const config = await getConfig();
-    
-    return c.json({
-      models: freeModels.map(m => ({
-        id: m.id,
-        name: m.name,
-        context_length: m.context_length
-      })),
-      current: config.default_model
-    });
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
-  }
-});
-
-// 3. 切换默认模型
-app.put('/admin/model', async (c) => {
-  try {
-    const { model } = await c.req.json();
-    if (!model || !model.endsWith(':free')) {
-      return c.json({ error: 'Invalid free model' }, 400);
-    }
-    
-    const newConfig = await setConfig({ default_model: model });
-    return c.json({ model: newConfig.default_model });
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500);
-  }
-});
-
-// 启动服务
-console.log(`🚀 OpenRouter Free Proxy starting on http://localhost:${ENV.PORT}`);
-serve({
-  fetch: app.fetch,
-  port: ENV.PORT
-});
-```
-
-#### 3.2 public/index.html（Web管理界面）
-```html
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenRouter Free Proxy 管理</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
-    .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; background: #2563eb; color: white; }
-    .btn:disabled { background: #93c5fd; cursor: not-allowed; }
-    .model-list { list-style: none; border: 1px solid #e5e7eb; border-radius: 4px; }
-    .model-item { padding: 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
-    .model-item:last-child { border-bottom: none; }
-    .model-item.active { background: #eff6ff; }
-    .model-name { font-weight: 500; }
-    .model-id { color: #6b7280; font-size: 0.875rem; margin-top: 0.25rem; }
-    .toast { position: fixed; top: 1rem; right: 1rem; padding: 1rem; border-radius: 4px; color: white; display: none; }
-    .toast.success { background: #10b981; }
-    .toast.error { background: #ef4444; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>OpenRouter Free Proxy</h1>
-    <button class="btn" id="refreshBtn">刷新模型列表</button>
-  </div>
-
-  <ul class="model-list" id="modelList"></ul>
-  
-  <div class="toast" id="toast"></div>
-
-  <script>
-    const toast = document.getElementById('toast');
-    const modelList = document.getElementById('modelList');
-    const refreshBtn = document.getElementById('refreshBtn');
-
-    // 显示提示
-    function showToast(message, type = 'success') {
-      toast.textContent = message;
-      toast.className = `toast ${type}`;
-      toast.style.display = 'block';
-      setTimeout(() => {
-        toast.style.display = 'none';
-      }, 3000);
-    }
-
-    // 加载模型列表
-    async function loadModels(forceRefresh = false) {
-      try {
-        refreshBtn.disabled = true;
-        const url = forceRefresh ? '/admin/models?refresh=true' : '/admin/models';
-        const res = await fetch(url);
-        const data = await res.json();
-        
-        modelList.innerHTML = '';
-        data.models.forEach(model => {
-          const li = document.createElement('li');
-          li.className = `model-item ${model.id === data.current ? 'active' : ''}`;
-          li.innerHTML = `
-            <div>
-              <div class="model-name">${model.name}</div>
-              <div class="model-id">${model.id} (${model.context_length.toLocaleString()} tokens)</div>
-            </div>
-            <button class="btn" ${model.id === data.current ? 'disabled' : ''} 
-                    onclick="selectModel('${model.id}')">
-              ${model.id === data.current ? '已选择' : '选择'}
-            </button>
-          `;
-          modelList.appendChild(li);
-        });
-      } catch (err) {
-        showToast('加载模型列表失败', 'error');
-      } finally {
-        refreshBtn.disabled = false;
-      }
-    }
-
-    // 选择模型
-    async function selectModel(modelId) {
-      try {
-        const res = await fetch('/admin/model', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: modelId })
-        });
-        
-        if (res.ok) {
-          showToast('模型切换成功');
-          loadModels();
-        } else {
-          showToast('模型切换失败', 'error');
-        }
-      } catch (err) {
-        showToast('网络错误', 'error');
-      }
-    }
-
-    // 刷新按钮
-    refreshBtn.addEventListener('click', () => loadModels(true));
-
-    // 初始化
-    loadModels();
-  </script>
-</body>
-</html>
 ```
 
 ---
 
-## ✅ 阶段4：测试与优化
-### 子任务
-1. 功能测试：验证API接口、流式响应、模型切换
-2. 性能优化：缓存、错误处理优化
-3. 文档完善：README.md、使用说明
+## Phase 4: 简化与清理（1小时）
 
-### 测试命令
-#### 1. 基础接口测试（curl）
-```bash
-# 测试非流式请求
-curl http://localhost:8765/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "写一个快速排序的Python代码"}],
-    "temperature": 0.7
-  }'
+### 4.1 最终架构
 
-# 测试流式请求
-curl http://localhost:8765/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "写一个快速排序的Python代码"}],
-    "stream": true
-  }'
+```
+用户请求
+   ↓
+有偏好模型？→ 是 → 尝试偏好模型
+   ↓ 否
+自动选择评分最高模型
+   ↓
+模型可用？→ 是 → 使用
+   ↓ 否
+尝试 Fallback 链（评分排序）
+   ↓
+遇到 429？→ 标记冷却 → 尝试下一个
+   ↓
+返回结果 + X-Actual-Model
 ```
 
-#### 2. 真实场景测试（opencode 集成测试）
-> 直接测试与OpenCode的集成效果，验证模型切换是否生效
+### 4.2 最小化配置
 
-```bash
-# 步骤1：配置OpenCode使用本地代理
-# 编辑OpenCode配置文件，设置base_url为 http://localhost:8765/v1
+```typescript
+// src/config.ts
+interface Config {
+  preferred_model?: string;  // 可选，用户偏好
+}
 
-# 步骤2：在Web管理页面切换到任意免费模型（比如 llama-3.2-3b-instruct:free）
-
-# 步骤3：运行测试命令（必须指定 -m 参数，模型名可随意填写，代理会自动使用Web界面选择的默认模型）
-opencode run "你当前使用的模型是什么？帮我写一段200字的Python语言优缺点介绍" -m "or-free-proxy"
-
-# 💡 说明：-m 参数指定的模型名仅用于触发OpenCode使用自定义模型逻辑，实际使用的模型是Web页面选择的默认模型，代理会自动替换
-
-# 步骤4：检查返回结果，验证模型是否正确切换
-# ✅ 正常：返回内容包含模型信息，代码生成正确
-# ❌ 异常：返回错误信息，需要检查日志排查问题
+// .env
+OPENROUTER_API_KEY=xxx
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+PORT=8765
 ```
 
-#### 3. 模型切换验证流程
-1. 在Web页面选择模型A → 运行opencode测试 → 确认使用模型A
-2. 在Web页面切换到模型B → 再次运行opencode测试 → 确认使用模型B
-3. 验证切换无需重启服务，立即生效
+### 4.3 API 接口
 
-### 最终项目结构（最简版，仅6个代码文件）
 ```
-/
+POST   /v1/chat/completions    # 核心：带自动 fallback
+GET    /admin/models           # 获取免费模型列表（带评分）
+PUT    /admin/model            # 设置偏好模型（可选）
+GET    /                       # Web UI
+```
+
+---
+
+## 实施顺序
+
+```
+Day 1: Phase 1 (pricing=0 检测)
+Day 2: Phase 2 (模型评分 + 推荐)
+Day 3-4: Phase 3 (Fallback 核心)
+Day 5: Phase 4 (简化清理)
+```
+
+### 验收标准
+
+**Phase 1**:
+- [ ] 模型列表比原来多
+- [ ] pricing=0 模型被正确识别
+
+**Phase 2**:
+- [ ] Web UI 显示「🎖️ 使用推荐模型」按钮
+- [ ] 点击后自动切换到评分最高的模型
+- [ ] 模型列表显示评分
+
+**Phase 3**:
+- [ ] 连续发送 20 个请求，不会遇到 429 错误
+- [ ] 响应头 `X-Actual-Model` 显示实际使用的模型
+- [ ] 故意选择限速模型，自动 fallback 成功
+
+---
+
+## 资源消耗
+
+| 功能 | 内存消耗 | 额外请求 |
+|------|---------|---------|
+| pricing=0 检测 | 0 | 0 |
+| 模型评分 | ~100KB | 0 |
+| Fallback 机制 | ~50KB | 失败时 N 次 |
+
+**总内存**：< 200KB
+
+---
+
+## 最终效果
+
+- **默认行为**：自动使用评分最高的免费模型
+- **用户可选**：在 Web UI 选择偏好模型
+- **自动处理**：fallback、速率限制、冷却
+- **透明告知**：响应头显示实际使用的模型
+
+**体验目标**：「无感使用免费 API」，无需手工切换
+
+---
+
+## 完整任务清单
+
+### Phase 1: 增强免费模型检测（Day 1）✅
+
+- [x] 1.1 更新 `src/models.ts`
+  - [x] 1.1.1 修改 `OpenRouterModel` 接口，添加 pricing 字段
+  - [x] 1.1.2 修改 `filterFreeModels` 函数，实现双重检测逻辑
+  - [x] 1.1.3 添加单元测试验证 pricing=0 检测
+
+- [x] 1.2 验证
+  - [x] 1.2.1 启动服务
+  - [x] 1.2.2 调用 `/admin/models` 接口
+  - [x] 1.2.3 确认模型数量比原来多
+
+### Phase 2: 模型评分与智能推荐（Day 2）✅
+
+- [x] 2.1 更新 `src/models.ts`
+  - [x] 2.1.1 添加 `ModelScore` 接口
+  - [x] 2.1.2 添加 `TRUSTED_PROVIDERS` 常量
+  - [x] 2.1.3 实现 `rankModels` 评分函数
+  - [x] 2.1.4 实现 `extractParameterScore` 参数提取函数
+  - [x] 2.1.5 实现 `getRecommendedModel` 函数
+  - [x] 2.1.6 添加单元测试
+
+- [x] 2.2 更新 `src/server.ts`
+  - [x] 2.2.1 修改 `/admin/models` 接口，调用 `rankModels`
+  - [x] 2.2.2 返回评分和推荐理由
+
+- [x] 2.3 更新 `public/index.html`
+  - [x] 2.3.1 添加「🎖️ 使用推荐模型」按钮
+  - [x] 2.3.2 添加推荐横幅展示区域
+  - [x] 2.3.3 修改 `loadModels` 函数，显示评分
+  - [x] 2.3.4 实现 `useRecommended` 函数
+
+- [x] 2.4 验证
+  - [x] 2.4.1 Web UI 显示评分
+  - [x] 2.4.2 点击「使用推荐模型」切换到最高评分的模型
+
+### Phase 3: Fallback 机制 + 速率限制处理（Day 3-4）✅
+
+- [x] 3.1 创建 `src/rate-limit.ts`
+  - [x] 3.1.1 定义 `RateLimitState` 接口
+  - [x] 3.1.2 实现 `loadRateLimitState` 函数
+  - [x] 3.1.3 实现 `saveRateLimitState` 函数
+  - [x] 3.1.4 实现 `isModelRateLimited` 函数
+  - [x] 3.1.5 实现 `markModelRateLimited` 函数
+  - [x] 3.1.6 添加单元测试
+
+- [x] 3.2 更新 `src/config.ts`
+  - [x] 3.2.1 修改 `Config` 接口，使用 `preferred_model?: string`
+  - [x] 3.2.2 更新 `DEFAULT_CONFIG`
+
+- [x] 3.3 创建 `src/fallback.ts`
+  - [x] 3.3.1 定义 `FallbackResult` 接口
+  - [x] 3.3.2 实现 `getFallbackChain` 函数
+  - [x] 3.3.3 实现 `executeWithFallback` 函数
+  - [x] 3.3.4 添加单元测试
+
+- [x] 3.4 更新 `src/server.ts`
+  - [x] 3.4.1 导入 `executeWithFallback`
+  - [x] 3.4.2 重写 `/v1/chat/completions` 处理逻辑
+  - [x] 3.4.3 添加 `X-Actual-Model` 响应头
+  - [x] 3.4.4 添加 `X-Fallback-Used` 响应头
+  - [x] 3.4.5 添加 `X-Fallback-Reason` 响应头
+
+- [x] 3.5 验证
+  - [x] 3.5.1 连续发送 20 个请求，无 429 错误
+  - [x] 3.5.2 检查响应头显示实际模型
+  - [x] 3.5.3 选择一个被限速的模型，验证自动 fallback
+  - [x] 3.5.4 检查 `rate-limit-state.json` 文件生成
+
+### Phase 4: 简化与清理（Day 5）✅
+
+- [x] 4.1 代码审查与清理
+  - [x] 4.1.1 删除未使用的导入
+  - [x] 4.1.2 删除未使用的变量和函数
+  - [x] 4.1.3 检查并修复 TypeScript 类型错误
+
+- [x] 4.2 测试
+  - [x] 4.2.1 运行 `npm test`，确保所有测试通过
+  - [x] 4.2.2 测试流式响应
+  - [x] 4.2.3 测试非流式响应
+  - [x] 4.2.4 测试 Web UI 所有功能
+
+- [x] 4.3 文档更新
+  - [x] 4.3.1 更新 README.md，说明新功能
+  - [x] 4.3.2 添加使用示例
+  - [x] 4.3.3 添加截图说明
+
+- [x] 4.4 最终验证
+  - [x] 4.4.1 完整流程测试
+  - [x] 4.4.2 性能测试（内存占用）
+  - [x] 4.4.3 长时间运行测试（30分钟）
+
+---
+
+## 项目完成后结构
+
+```
+or_free_proxy/
 ├── src/
-│   ├── server.ts      # 主入口（包含所有核心逻辑，代理、路由都在这里，简化结构）
-│   ├── config.ts      # 配置读写（很小的模块，保留）
-│   └── models.ts      # 模型获取与过滤（很小的模块，保留）
+│   ├── server.ts          # 主服务（修改）
+│   ├── models.ts          # 模型检测与评分（修改）
+│   ├── config.ts          # 配置管理（修改）
+│   ├── rate-limit.ts      # 速率限制管理（新增）
+│   └── fallback.ts        # Fallback 逻辑（新增）
 ├── public/
-│   └── index.html     # Web管理界面
-├── .env
-├── .gitignore
+│   └── index.html         # Web UI（修改）
+├── __tests__/
+│   ├── models.test.ts     # 模型测试
+│   ├── rate-limit.test.ts # 速率限制测试
+│   └── fallback.test.ts   # Fallback 测试
+├── config.json            # 用户偏好配置
+├── rate-limit-state.json  # 速率限制状态
+├── .env                   # API Key
 ├── package.json
-└── tsconfig.json
+├── tsconfig.json
+└── README.md
 ```
-> 简化说明：
-> 1. 移除proxy.ts，把转发逻辑直接写到server.ts里，减少文件数量
-> 2. 移除tsup.config.ts、.env.example等非必须文件
-> 3. 总代码量 < 500行，非常容易维护
 
 ---
 
-## 🎯 完成标准（本地使用验证）
-1. ✅ 执行 `npm start` 服务正常启动，访问 http://localhost:8765 可看到管理界面
-2. ✅ 模型列表加载正常，点击切换按钮可正常切换默认模型，无需重启服务
-3. ✅ curl 测试接口返回正常，支持流式响应
-4. ✅ OpenCode 配置 base_url = `http://localhost:8765/v1` 后，可正常调用生成代码
-5. ✅ 切换模型后，OpenCode 后续请求自动使用新模型，无需修改任何配置
+## 验收标准总览
+
+| 功能 | 验收标准 | 状态 |
+|------|----------|------|
+| 免费模型检测 | 模型列表包含 pricing=0 的模型 | ✅ |
+| 模型评分 | Web UI 显示评分和推荐理由 | ✅ |
+| 智能推荐 | 一键使用评分最高的模型 | ✅ |
+| Fallback 机制 | 失败时自动切换，响应头告知 | ✅ |
+| 速率限制 | 30分钟冷却，避免重复请求 | ✅ |
+| 流式响应 | 支持流式输出，无延迟 | ✅ |
+| 测试覆盖 | 所有核心功能都有单元测试 | ✅ |

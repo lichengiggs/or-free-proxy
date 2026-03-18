@@ -1,0 +1,47 @@
+{
+  "active": {
+    "limited_at": "2026-03-18T06:27:20.997Z",
+    "reason": "rate_limit"
+  },
+  "failing-model": {
+    "limited_at": "2026-03-18T06:27:21.277Z",
+    "reason": "rate_limit"
+  },
+  "preferred-model": {
+    "limited_at": "2026-03-18T06:27:21.286Z",
+    "reason": "rate_limit"
+  },
+  "rate-limited-model": {
+    "limited_at": "2026-03-18T06:27:21.279Z",
+    "retry_after": 3600,
+    "reason": "rate_limit"
+  },
+  "unavailable-model": {
+    "limited_at": "2026-03-18T06:27:21.280Z",
+    "reason": "unavailable"
+  },
+  "first-model": {
+    "limited_at": "2026-03-18T06:27:21.281Z",
+    "reason": "rate_limit"
+  },
+  "meta-llama/llama-3.3-70b-instruct:free": {
+    "limited_at": "2026-03-18T07:04:23.659Z",
+    "reason": "rate_limit"
+  },
+  "model": {
+    "limited_at": "2026-03-18T06:27:21.282Z",
+    "reason": "rate_limit"
+  },
+  "google/gemma-3-27b-it:free": {
+    "limited_at": "2026-03-18T07:04:24.049Z",
+    "reason": "rate_limit"
+  },
+  "google/gemma-3-12b-it:free": {
+    "limited_at": "2026-03-18T07:05:11.497Z",
+    "reason": "rate_limit"
+  },
+  "openrouter/free": {
+    "limited_at": "2026-03-18T06:27:21.282Z",
+    "reason": "rate_limit"
+  }
+}

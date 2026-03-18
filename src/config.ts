@@ -4,8 +4,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-interface Config {
+export interface Config {
   default_model: string;
+  preferred_model?: string;
 }
 
 const CONFIG_PATH = 'config.json';

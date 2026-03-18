@@ -4,7 +4,8 @@ import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { stream } from 'hono/streaming';
 import { getConfig, setConfig, ENV, fetchWithTimeout } from './config';
-import { fetchModels, filterFreeModels } from './models';
+import { fetchModels, filterFreeModels, rankModels } from './models';
+import { executeWithFallback } from './fallback';
 
 const app = new Hono();
 
@@ -26,60 +27,79 @@ app.use('/*', serveStatic({
   index: 'index.html'
 }));
 
-// 转发请求
-async function proxyRequest(
-  path: string,
-  method: string,
-  body: any,
-  headers: Record<string, string>
-): Promise<Response> {
-  const config = await getConfig();
-  
-  // 始终使用默认模型，忽略请求中传入的模型名
-  body.model = config.default_model;
-
-  // 构建请求头
-  const proxyHeaders: Record<string, string> = {
-    'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
-    'HTTP-Referer': 'http://localhost:8765',
-    'X-Title': 'OpenRouter Free Proxy',
-    'Content-Type': 'application/json'
-  };
-
-  // 转发原始请求头（排除host和content-length）
-  Object.entries(headers).forEach(([key, value]) => {
-    if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
-      proxyHeaders[key] = value;
-    }
-  });
-
-  return await fetchWithTimeout(`${ENV.OPENROUTER_BASE_URL}${path}`, {
-    method,
-    headers: proxyHeaders,
-    body: JSON.stringify(body)
-  }, 30000);
-}
-
 // 1. Chat Completions 接口
 app.post('/v1/chat/completions', async (c) => {
   try {
     const body = await c.req.json();
     const headers = Object.fromEntries(c.req.raw.headers.entries());
-    
-    const response = await proxyRequest(
-      '/chat/completions',
-      'POST',
-      body,
-      headers
+    const config = await getConfig();
+
+    const result = await executeWithFallback(
+      config.default_model,
+      async (modelToTry) => {
+        body.model = modelToTry;
+
+        const proxyHeaders: Record<string, string> = {
+          'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'http://localhost:8765',
+          'X-Title': 'OpenRouter Free Proxy',
+          'Content-Type': 'application/json'
+        };
+
+        Object.entries(headers).forEach(([key, value]) => {
+          if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
+            proxyHeaders[key] = value;
+          }
+        });
+
+        try {
+          const response = await fetchWithTimeout(
+            `${ENV.OPENROUTER_BASE_URL}/chat/completions`,
+            {
+              method: 'POST',
+              headers: proxyHeaders,
+              body: JSON.stringify(body)
+            },
+            60000
+          );
+
+          if (response.ok) {
+            return { success: true, response };
+          }
+
+          const errorBody = await response.text();
+          return {
+            success: false,
+            error: {
+              status: response.status,
+              message: errorBody,
+              retry_after: response.headers.get('retry-after') ? parseInt(response.headers.get('retry-after')!) : undefined
+            }
+          };
+        } catch (err: any) {
+          return { success: false, error: { message: err.message } };
+        }
+      }
     );
 
-    // 流式响应
+    const response = result.result;
+    const fallbackInfo = result.fallbackInfo;
+
+    c.header('X-Actual-Model', fallbackInfo.model);
+    if (fallbackInfo.is_fallback) {
+      c.header('X-Fallback-Used', 'true');
+      c.header('X-Fallback-Reason', fallbackInfo.fallback_reason || 'Primary model unavailable');
+    }
+
     if (body.stream) {
       const responseHeaders = Object.fromEntries(response.headers.entries());
       c.status(response.status as any);
       Object.entries(responseHeaders).forEach(([key, value]) => {
-        c.header(key, value);
+        if (key.toLowerCase() !== 'content-encoding') {
+          c.header(key, value);
+        }
       });
+
       return stream(c, async (stream) => {
         if (!response.body) return;
         const reader = response.body.getReader();
@@ -92,9 +112,9 @@ app.post('/v1/chat/completions', async (c) => {
       });
     }
 
-    // 非流式响应
     const data = await response.json();
     return c.json(data, { status: response.status as any });
+
   } catch (err: any) {
     console.error(`[${new Date().toISOString()}] Request error:`, err.message);
     return c.json({
@@ -113,19 +133,24 @@ app.get('/admin/models', async (c) => {
     const forceRefresh = c.req.query('refresh') === 'true';
     const models = await fetchModels(forceRefresh);
     const freeModels = filterFreeModels(models);
+    const rankedModels = rankModels(freeModels);
     const config = await getConfig();
-    
+
     return c.json({
-      models: freeModels.map(m => ({
-        id: m.id,
-        name: m.name,
-        context_length: m.context_length
+      models: rankedModels.map(({ model, score, reasons }) => ({
+        id: model.id,
+        name: model.name,
+        context_length: model.context_length,
+        score,
+        reasons,
+        is_recommended: score >= 80
       })),
-      current: config.default_model
+      current: config.default_model,
+      recommended: rankedModels[0]?.model.id
     });
   } catch (err: any) {
     console.error('Error fetching models:', err);
-    return c.json({ 
+    return c.json({
       error: err.message,
       details: err.toString(),
       stack: err.stack
@@ -137,8 +162,8 @@ app.get('/admin/models', async (c) => {
 app.put('/admin/model', async (c) => {
   try {
     const { model } = await c.req.json();
-    if (!model || !model.endsWith(':free')) {
-      return c.json({ error: 'Invalid free model' }, 400);
+    if (!model) {
+      return c.json({ error: 'Model is required' }, 400);
     }
     
     const newConfig = await setConfig({ default_model: model });
