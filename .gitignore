@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+config.env
 config.json
+openclaw.json
+rate-limit-state.json
 *.log
 .DS_Store
