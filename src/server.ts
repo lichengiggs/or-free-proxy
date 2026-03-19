@@ -3,11 +3,14 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { stream } from 'hono/streaming';
-import { getConfig, setConfig, ENV, fetchWithTimeout } from './config';
+import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus } from './config';
 import { fetchModels, filterFreeModels, rankModels } from './models';
 import { executeWithFallback } from './fallback';
+import { detectOpenClawConfig, mergeConfig, listBackups, restoreBackup } from './openclaw-config';
+import { CandidatePool } from './candidate-pool';
 
 const app = new Hono();
+const candidatePool = new CandidatePool();
 
 export { app, getConfig, setConfig };
 
@@ -127,26 +130,30 @@ app.post('/v1/chat/completions', async (c) => {
   }
 });
 
-// 2. 获取模型列表
+// 2. 获取模型列表（只返回验证可用的）
 app.get('/admin/models', async (c) => {
   try {
     const forceRefresh = c.req.query('refresh') === 'true';
-    const models = await fetchModels(forceRefresh);
-    const freeModels = filterFreeModels(models);
-    const rankedModels = rankModels(freeModels);
+    
+    if (forceRefresh || candidatePool.getCandidates().length === 0) {
+      await candidatePool.refresh();
+    }
+    
+    const candidates = candidatePool.getCandidates();
     const config = await getConfig();
 
     return c.json({
-      models: rankedModels.map(({ model, score, reasons }) => ({
-        id: model.id,
-        name: model.name,
-        context_length: model.context_length,
-        score,
-        reasons,
-        is_recommended: score >= 80
+      models: candidates.map(candidate => ({
+        id: candidate.id,
+        name: candidate.name,
+        context_length: candidate.context_length || 0,
+        is_recommended: true,
+        last_validated: candidate.lastValidated
       })),
       current: config.default_model,
-      recommended: rankedModels[0]?.model.id
+      recommended: candidates[0]?.id,
+      total_available: candidates.length,
+      last_update: candidatePool.getLastUpdateTime()
     });
   } catch (err: any) {
     console.error('Error fetching models:', err);
@@ -172,6 +179,108 @@ app.put('/admin/model', async (c) => {
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
+});
+
+// 4. 验证并保存 API Key
+app.post('/api/validate-key', async (c) => {
+  try {
+    const { apiKey } = await c.req.json();
+    
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      return c.json({ success: false, error: 'API key is required' }, 400);
+    }
+    
+    const trimmedKey = apiKey.trim();
+    
+    if (!trimmedKey.startsWith('sk-')) {
+      return c.json({ success: false, error: 'Invalid API key format' }, 400);
+    }
+    
+    try {
+      const response = await fetchWithTimeout(
+        `${ENV.OPENROUTER_BASE_URL}/models`,
+        {
+          headers: {
+            'Authorization': `Bearer ${trimmedKey}`,
+            'HTTP-Referer': 'http://localhost:8765',
+            'X-Title': 'OpenRouter Free Proxy'
+          }
+        },
+        10000
+      );
+      
+      if (response.status === 401) {
+        return c.json({ success: false, error: 'Invalid API key' }, 401);
+      }
+      
+      if (!response.ok) {
+        return c.json({ success: false, error: 'Network error, please try again later' }, 500);
+      }
+      
+      await saveApiKey(trimmedKey);
+      
+      return c.json({ success: true, message: 'API key validated and saved successfully' });
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return c.json({ success: false, error: 'Network error, please try again later' }, 500);
+      }
+      return c.json({ success: false, error: 'Network error, please try again later' }, 500);
+    }
+  } catch (err: any) {
+    return c.json({ success: false, error: 'Server error' }, 500);
+  }
+});
+
+// 5. 获取 API Key 状态
+app.get('/api/validate-key', async (c) => {
+  const status = await getApiKeyStatus();
+  return c.json(status);
+});
+
+// 6. 检测 OpenClaw 配置
+app.get('/api/detect-openclaw', async (c) => {
+  const status = await detectOpenClawConfig();
+  return c.json(status);
+});
+
+// 7. 一键配置到 OpenClaw
+app.post('/api/configure-openclaw', async (c) => {
+  const status = await getApiKeyStatus();
+  
+  if (!status.configured) {
+    return c.json({ success: false, error: 'Please validate your API key first' }, 400);
+  }
+  
+  const result = await mergeConfig();
+  
+  if (!result.success) {
+    return c.json(result, 400);
+  }
+  
+  return c.json({ success: true, backup: result.backup, message: 'Configuration successful' });
+});
+
+// 8. 获取备份列表
+app.get('/api/backups', async (c) => {
+  const backups = await listBackups();
+  return c.json({ backups });
+});
+
+// 9. 恢复配置
+app.post('/api/restore-backup', async (c) => {
+  const { backup } = await c.req.json();
+  
+  if (!backup || typeof backup !== 'string') {
+    return c.json({ success: false, error: 'Backup filename is required' }, 400);
+  }
+  
+  const result = await restoreBackup(backup);
+  
+  if (!result.success) {
+    return c.json(result, 400);
+  }
+  
+  return c.json({ success: true, message: 'Restore successful' });
 });
 
 // 启动服务

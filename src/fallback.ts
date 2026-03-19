@@ -20,7 +20,7 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
     const freeModels = filterFreeModels(models);
     const ranked = rankModels(freeModels);
 
-    for (const { model } of ranked.slice(0, 3)) {
+    for (const { model } of ranked) {
       if (!chain.includes(model.id)) {
         chain.push(model.id);
       }

@@ -3,81 +3,215 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenRouter Free Proxy 管理</title>
+  <title>OpenRouter Free Proxy</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
-    .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; background: #2563eb; color: white; }
-    .btn:disabled { background: #93c5fd; cursor: not-allowed; }
-    .model-list { list-style: none; border: 1px solid #e5e7eb; border-radius: 4px; }
-    .model-item { padding: 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; background: #f9fafb; }
+    .card { background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #111827; }
+    h2 { font-size: 1.125rem; margin-bottom: 1rem; color: #374151; }
+    .btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .input { width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 1rem; margin-bottom: 0.75rem; }
+    .input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+    .status { padding: 0.75rem; border-radius: 6px; margin-top: 0.75rem; }
+    .status-success { background: #d1fae5; color: #065f46; }
+    .status-error { background: #fee2e2; color: #991b1b; }
+    .status-info { background: #dbeafe; color: #1e40af; }
+    .model-list { list-style: none; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+    .model-item { padding: 0.75rem 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
     .model-item:last-child { border-bottom: none; }
+    .model-item.recommended { background: #f0fdf4; }
     .model-item.active { background: #eff6ff; }
-    .model-name { font-weight: 500; }
-    .model-id { color: #6b7280; font-size: 0.875rem; margin-top: 0.25rem; }
-    .toast { position: fixed; top: 1rem; right: 1rem; padding: 1rem; border-radius: 4px; color: white; display: none; }
+    .model-name { font-weight: 500; color: #111827; }
+    .model-id { color: #6b7280; font-size: 0.875rem; margin-top: 0.125rem; }
+    .badge { background: #10b981; color: white; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; margin-left: 0.5rem; }
+    .toast { position: fixed; top: 1rem; right: 1rem; padding: 1rem 1.5rem; border-radius: 6px; color: white; display: none; z-index: 1000; }
     .toast.success { background: #10b981; }
     .toast.error { background: #ef4444; }
+    .toast.info { background: #3b82f6; }
+    .link { color: #2563eb; text-decoration: none; }
+    .link:hover { text-decoration: underline; }
+    .section-api-key { display: block; }
+    .section-models { display: none; }
+    .section-openclaw { display: none; }
+    .spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 0.5rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .backup-item { padding: 0.5rem 0; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+    .backup-item:last-child { border-bottom: none; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>OpenRouter Free Proxy</h1>
-    <button class="btn" id="refreshBtn">刷新模型列表</button>
+  <h1>OpenRouter Free Proxy</h1>
+
+  <div class="card" id="apiKeySection">
+    <h2>1. 配置 OpenRouter API Key</h2>
+    <div id="apiKeyForm">
+      <input type="password" id="apiKeyInput" class="input" placeholder="输入你的 OpenRouter API Key" autocomplete="off">
+      <div style="font-size: 0.875rem; color: #6b7280; margin-bottom: 1rem;">
+        没有 Key？<a href="https://openrouter.ai/keys" target="_blank" class="link">点击获取</a>
+      </div>
+      <button class="btn btn-primary" id="validateBtn" onclick="validateApiKey()">保存并验证</button>
+    </div>
+    <div id="apiKeyStatus"></div>
   </div>
 
-  <ul class="model-list" id="modelList"></ul>
-  
+  <div class="card" id="modelsSection" style="display: none;">
+    <h2>2. 可用模型</h2>
+    <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">推荐使用 auto，它会自动选择可用的最佳模型</p>
+    <button class="btn btn-secondary" id="refreshModelsBtn" onclick="refreshModels()" style="margin-bottom: 1rem;">刷新模型列表</button>
+    <ul class="model-list" id="modelList"></ul>
+    <div style="margin-top: 1rem; padding: 0.75rem; background: #f3f4f6; border-radius: 6px; font-size: 0.875rem;">
+      在 OpenClaw 中使用：<code style="background: #e5e7eb; padding: 0.125rem 0.375rem; border-radius: 4px;">/model free_proxy/auto</code>
+    </div>
+    <div id="currentModel" style="margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #ecfdf5; border-radius: 6px; font-size: 0.875rem; display: none;">
+      当前模型：<span id="currentModelName" style="font-weight: 500;"></span>
+    </div>
+  </div>
+
+  <div class="card" id="openClawSection" style="display: none;">
+    <h2>3. 配置 OpenClaw</h2>
+    <div id="openClawStatus"></div>
+    <div id="openClawActions" style="margin-top: 1rem;"></div>
+    <div id="backupSection" style="margin-top: 1rem;"></div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
     const toast = document.getElementById('toast');
-    const modelList = document.getElementById('modelList');
-    const refreshBtn = document.getElementById('refreshBtn');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const validateBtn = document.getElementById('validateBtn');
+    const apiKeyStatus = document.getElementById('apiKeyStatus');
+    const apiKeyForm = document.getElementById('apiKeyForm');
+    const modelsSection = document.getElementById('modelsSection');
+    const openClawSection = document.getElementById('openClawSection');
 
-    // 显示提示
     function showToast(message, type = 'success') {
       toast.textContent = message;
       toast.className = `toast ${type}`;
       toast.style.display = 'block';
-      setTimeout(() => {
-        toast.style.display = 'none';
-      }, 3000);
+      setTimeout(() => { toast.style.display = 'none'; }, 3000);
     }
 
-    // 加载模型列表
-    async function loadModels(forceRefresh = false) {
+    async function checkApiKeyStatus() {
       try {
-        refreshBtn.disabled = true;
-        const url = forceRefresh ? '/admin/models?refresh=true' : '/admin/models';
-        const res = await fetch(url);
+        const res = await fetch('/api/validate-key');
         const data = await res.json();
-        
+        if (data.configured) {
+          showApiKeyConfigured(data.masked);
+        } else {
+          showApiKeyNotConfigured();
+        }
+      } catch (err) {
+        console.error('Failed to check API key status:', err);
+      }
+    }
+
+    function showApiKeyConfigured(masked) {
+      apiKeyForm.style.display = 'none';
+      apiKeyStatus.innerHTML = `
+        <div class="status status-success">
+          <strong>已配置</strong> (${masked})
+          <button class="btn btn-secondary" onclick="resetApiKey()" style="margin-left: 1rem; padding: 0.25rem 0.5rem; font-size: 0.875rem;">修改</button>
+        </div>
+      `;
+      modelsSection.style.display = 'block';
+      loadModels();
+      checkOpenClawStatus();
+    }
+
+    function showApiKeyNotConfigured() {
+      apiKeyForm.style.display = 'block';
+      apiKeyStatus.innerHTML = `
+        <div class="status status-info">未配置</div>
+      `;
+    }
+
+    function resetApiKey() {
+      apiKeyInput.value = '';
+      apiKeyForm.style.display = 'block';
+      apiKeyStatus.innerHTML = '';
+      modelsSection.style.display = 'none';
+      openClawSection.style.display = 'none';
+    }
+
+    async function validateApiKey() {
+      const apiKey = apiKeyInput.value.trim();
+      if (!apiKey) {
+        showToast('请输入 API Key', 'error');
+        return;
+      }
+
+      validateBtn.disabled = true;
+      validateBtn.innerHTML = '<span class="spinner"></span>验证中...';
+
+      try {
+        const res = await fetch('/api/validate-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey })
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          showToast('API Key 验证成功');
+          showApiKeyConfigured(data.masked || 'sk-****...');
+        } else {
+          showToast(data.error || '验证失败', 'error');
+        }
+      } catch (err) {
+        showToast('网络错误，请稍后重试', 'error');
+      } finally {
+        validateBtn.disabled = false;
+        validateBtn.innerHTML = '保存并验证';
+      }
+    }
+
+    async function loadModels() {
+      try {
+        const res = await fetch('/admin/models');
+        const data = await res.json();
+        const modelList = document.getElementById('modelList');
         modelList.innerHTML = '';
+        const currentModelEl = document.getElementById('currentModel');
+        const currentModelName = document.getElementById('currentModelName');
+        
         data.models.forEach(model => {
+          const isCurrent = model.id === data.current;
           const li = document.createElement('li');
-          li.className = `model-item ${model.id === data.current ? 'active' : ''}`;
+          li.className = `model-item ${isCurrent ? 'active' : ''} ${model.is_recommended ? 'recommended' : ''}`;
           li.innerHTML = `
             <div>
-              <div class="model-name">${model.name}</div>
-              <div class="model-id">${model.id} (${model.context_length.toLocaleString()} tokens)</div>
+              <div class="model-name">
+                ${model.name}
+                ${model.is_recommended ? '<span class="badge">推荐</span>' : ''}
+                ${isCurrent ? '<span class="badge" style="background: #2563eb;">当前</span>' : ''}
+              </div>
+              <div class="model-id">${model.id}</div>
             </div>
-            <button class="btn" ${model.id === data.current ? 'disabled' : ''} 
-                    onclick="selectModel('${model.id}')">
-              ${model.id === data.current ? '已选择' : '选择'}
+            <button class="btn btn-primary" ${isCurrent ? 'disabled' : ''} onclick="selectModel('${model.id}')">
+              ${isCurrent ? '已选择' : '选择'}
             </button>
           `;
           modelList.appendChild(li);
         });
+        
+        const current = data.models.find(m => m.id === data.current);
+        if (current) {
+          currentModelName.textContent = `${current.name} (${current.id})`;
+          currentModelEl.style.display = 'block';
+        }
       } catch (err) {
         showToast('加载模型列表失败', 'error');
-      } finally {
-        refreshBtn.disabled = false;
       }
     }
-
-    // 选择模型
+    
     async function selectModel(modelId) {
       try {
         const res = await fetch('/admin/model', {
@@ -97,11 +231,116 @@
       }
     }
 
-    // 刷新按钮
-    refreshBtn.addEventListener('click', () => loadModels(true));
+    async function refreshModels() {
+      const btn = document.getElementById('refreshModelsBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>刷新中...';
+      try {
+        const res = await fetch('/admin/models?refresh=true');
+        if (res.ok) {
+          showToast('模型列表已刷新');
+          loadModels();
+        }
+      } catch (err) {
+        showToast('刷新失败', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '刷新模型列表';
+      }
+    }
 
-    // 初始化
-    loadModels();
+    async function checkOpenClawStatus() {
+      try {
+        const res = await fetch('/api/detect-openclaw');
+        const data = await res.json();
+        const statusEl = document.getElementById('openClawStatus');
+        const actionsEl = document.getElementById('openClawActions');
+
+        openClawSection.style.display = 'block';
+
+        if (data.exists && data.isValid) {
+          statusEl.innerHTML = `<div class="status status-success"><strong>✓ 已检测到 OpenClaw</strong><br><span style="font-size: 0.875rem;">配置文件: ${data.path}</span></div>`;
+          actionsEl.innerHTML = `<button class="btn btn-primary" onclick="configureOpenClaw()">更新 OpenClaw 配置</button>`;
+        } else if (data.exists && !data.isValid) {
+          statusEl.innerHTML = `<div class="status status-error"><strong>配置文件格式错误</strong><br>请手动检查或删除 ${data.path}</div>`;
+          actionsEl.innerHTML = '';
+        } else {
+          statusEl.innerHTML = `<div class="status status-info"><strong>未检测到 OpenClaw 配置</strong></div>`;
+          actionsEl.innerHTML = `<button class="btn btn-primary" onclick="configureOpenClaw()">创建 OpenClaw 配置</button>`;
+        }
+
+        loadBackups();
+      } catch (err) {
+        console.error('Failed to check OpenClaw status:', err);
+      }
+    }
+
+    async function configureOpenClaw() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>配置中...';
+      try {
+        const res = await fetch('/api/configure-openclaw', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast('配置成功');
+          if (data.backup) {
+            showToast(`已创建备份: ${data.backup.split('/').pop()}`, 'info');
+          }
+          checkOpenClawStatus();
+        } else {
+          showToast(data.error || '配置失败', 'error');
+        }
+      } catch (err) {
+        showToast('配置失败', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '更新 OpenClaw 配置';
+      }
+    }
+
+    async function loadBackups() {
+      try {
+        const res = await fetch('/api/backups');
+        const data = await res.json();
+        const backupSection = document.getElementById('backupSection');
+        if (data.backups && data.backups.length > 0) {
+          backupSection.innerHTML = `
+            <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">配置备份</h3>
+            ${data.backups.slice(0, 3).map(b => `
+              <div class="backup-item">
+                <span style="font-size: 0.875rem; color: #6b7280;">${b.split('/').pop()}</span>
+                <button class="btn btn-secondary" onclick="restoreBackup('${b}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">恢复</button>
+              </div>
+            `).join('')}
+          `;
+        }
+      } catch (err) {
+        console.error('Failed to load backups:', err);
+      }
+    }
+
+    async function restoreBackup(backup) {
+      if (!confirm('确定要恢复此配置吗？')) return;
+      try {
+        const res = await fetch('/api/restore-backup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ backup })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('配置已恢复');
+          checkOpenClawStatus();
+        } else {
+          showToast(data.error || '恢复失败', 'error');
+        }
+      } catch (err) {
+        showToast('恢复失败', 'error');
+      }
+    }
+
+    checkApiKeyStatus();
   </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 import { ENV, fetchWithTimeout } from './config';
 
-interface OpenRouterModel {
+export interface OpenRouterModel {
   id: string;
   name: string;
   description: string;
