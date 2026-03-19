@@ -1,167 +1,87 @@
 # OpenRouter Free Proxy
 
-一个轻量级的 OpenRouter 免费模型代理服务，提供智能降级、Web 配置界面和 OpenClaw 一键集成功能。
+帮你免费用 AI 模型的代理工具。不用管哪个模型能用，它会自动帮你找能用的。
 
-## 功能特性
+## 有什么用？
 
-- 🤖 **智能模型降级** - 自动尝试多个免费模型，直到成功
-- 🌐 **Web 配置界面** - 通过浏览器配置 API Key 和管理模型
-- ✅ **模型可用性验证** - 只显示当前可用的模型
-- 🔧 **OpenClaw 一键集成** - 自动配置 OpenClaw 客户端
-- 💾 **配置备份恢复** - 自动备份 OpenClaw 配置，支持一键恢复
-- 🚀 **零配置启动** - 默认自动选择最佳可用模型
+**痛点：** OpenRouter 上面很多免费模型，但经常这个不能用、那个被限流，要手动换来换去很麻烦。
 
-## 快速开始
+**解决：** 这个工具会自动帮你尝试多个模型，直到找到能用的为止。
+
+## 三步上手
 
 ### 1. 安装
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/lichengiggs/or-free-proxy.git
 cd or-free-proxy
 npm install
 ```
 
-### 2. 启动服务
+### 2. 启动
 
 ```bash
 npm start
 ```
 
-服务将在 http://localhost:8765 启动
+会看到提示：服务已启动 http://localhost:8765
 
-### 3. 配置（首次使用）
+### 3. 配置
 
-1. 打开浏览器访问 http://localhost:8765
-2. 输入你的 OpenRouter API Key（从 https://openrouter.ai/keys 获取）
-3. 点击"保存并验证"
-4. 在可用模型列表中选择你想使用的模型
-5. 点击"更新 OpenClaw 配置"（如果使用 OpenClaw）
+打开浏览器访问 http://localhost:8765
 
-### 4. 使用
+**第一步：** 填 API Key
+- 去 https://openrouter.ai/keys 注册账号（免费）
+- 复制你的 Key，贴到网页里
+- 点"保存并验证"
 
-#### 直接 API 调用
+**第二步：** 选模型
+- 页面会显示当前能用的模型（已验证过）
+- 选你想用的，点"选择"
+- 推荐用 `auto`，它会自动选最好的
+
+**第三步（如果用 OpenClaw）：**
+- 点"更新 OpenClaw 配置"
+- 然后在 OpenClaw 里执行 `/model free_proxy/auto`
+
+## 用好了
+
+现在你的 AI 客户端（OpenClaw、Cursor 等）把 API 地址改成：
+
+```
+http://localhost:8765/v1
+```
+
+API Key 随便填，模型名也随便填，工具会自动处理。
+
+## 常见问题
+
+**Q: 为什么显示"无可用模型"？**
+A: 免费模型有使用限制，等几分钟再刷新试试。
+
+**Q: 为什么响应慢？**
+A: 工具在逐个尝试模型，第一个失败就试下一个。正常 1-3 秒。
+
+**Q: 支持哪些客户端？**
+A: 任何支持 OpenAI API 格式的客户端都可以：OpenClaw、Cursor、Continue 等。
+
+**Q: API Key 存在哪里？**
+A: 存在本地 `.env` 文件，不会上传到任何地方。
+
+## 命令速查
 
 ```bash
-curl -X POST http://localhost:8765/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-api-key" \
-  -d '{
-    "model": "auto",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "max_tokens": 100
-  }'
+# 启动服务
+npm start
+
+# 停止服务
+Ctrl + C
+
+# 更新代码
+git pull
+npm install
 ```
 
-#### OpenClaw 配置
+## 开源协议
 
-如果使用 OpenClaw，在配置成功后执行：
-
-```bash
-/model free_proxy/auto
-```
-
-或者使用具体模型：
-
-```bash
-/model free_proxy/meta-llama/llama-3.3-70b-instruct:free
-```
-
-## 配置说明
-
-### 环境变量
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `OPENROUTER_API_KEY` | OpenRouter API Key | - |
-| `PORT` | 服务端口 | 8765 |
-| `OPENROUTER_BASE_URL` | OpenRouter API 地址 | https://openrouter.ai/api/v1 |
-
-### 配置文件
-
-项目会在首次运行时自动创建 `config.json` 文件：
-
-```json
-{
-  "default_model": "auto"
-}
-```
-
-## API 端点
-
-### 聊天补全
-
-```
-POST /v1/chat/completions
-```
-
-兼容 OpenAI API 格式，支持流式输出。
-
-### 获取模型列表
-
-```
-GET /admin/models
-```
-
-返回当前验证可用的免费模型列表。
-
-### Web 界面
-
-```
-GET /
-```
-
-提供可视化的配置界面。
-
-## 项目结构
-
-```
-or-free-proxy/
-├── src/
-│   ├── server.ts          # HTTP 服务器
-│   ├── config.ts          # 配置管理
-│   ├── models.ts          # 模型获取和过滤
-│   ├── fallback.ts        # 降级逻辑
-│   ├── rate-limit.ts      # 速率限制
-│   ├── candidate-pool.ts  # 候选池管理
-│   └── openclaw-config.ts # OpenClaw 配置
-├── public/
-│   └── index.html         # Web 界面
-├── __tests__/             # 测试文件
-├── package.json
-└── README.md
-```
-
-## 开发
-
-### 运行测试
-
-```bash
-npm test
-```
-
-### 代码检查
-
-```bash
-npx tsc --noEmit
-```
-
-## 注意事项
-
-1. **免费模型限制** - OpenRouter 免费模型有速率限制，如果遇到 429 错误，请稍后再试
-2. **模型可用性** - 免费模型的可用性会随时间变化，建议开启自动降级
-3. **API Key 安全** - 请勿将 `.env` 文件提交到版本控制
-
-## 技术栈
-
-- **Runtime**: Node.js + TypeScript
-- **Web Framework**: Hono
-- **Testing**: Jest
-- **Process Manager**: tsx
-
-## 许可证
-
-MIT
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
+MIT - 随便用
