@@ -24,7 +24,9 @@ describe('Custom Provider and Model Management', () => {
       // Verify it was saved
       const config = await import('../src/config').then(m => m.getConfig());
       expect(config.customProviders).toBeDefined();
-      expect(config.customProviders).toContainEqual(customProvider);
+      expect(config.customProviders).toEqual(expect.arrayContaining([
+        expect.objectContaining(customProvider)
+      ]));
     });
   });
 
@@ -50,7 +52,9 @@ describe('Custom Provider and Model Management', () => {
       
       const config = await import('../src/config').then(m => m.getConfig());
       expect(config.customModels).toBeDefined();
-      expect(config.customModels).toContainEqual(customModel);
+      expect(config.customModels).toEqual(expect.arrayContaining([
+        expect.objectContaining(customModel)
+      ]));
     });
 
     test('should allow multiple custom models for same provider', async () => {

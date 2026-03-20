@@ -3,11 +3,12 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { stream } from 'hono/streaming';
-import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus, getProviderKey, saveProviderKey, getAllProviderKeysStatus, saveCustomProvider, saveCustomModel, CustomProvider, CustomModel } from './config';
+import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus, getProviderKey, saveProviderKey, getAllProviderKeysStatus, saveCustomProvider, saveCustomModel, getCustomModels, deleteCustomModel } from './config';
 import { fetchModels, filterFreeModels, rankModels, fetchAllModels } from './models';
 import { executeWithFallback } from './fallback';
 import { detectOpenClawConfig, mergeConfig, listBackups, restoreBackup } from './openclaw-config';
 import { PROVIDERS } from './providers/registry';
+import { validateProviderKey, verifyModelAvailability, type VerifyReason } from './provider-health';
 
 const app = new Hono();
 
@@ -16,7 +17,10 @@ export { app, getConfig, setConfig };
 // CORS 配置
 app.use('/*', cors({
   origin: (origin) => {
-    if (origin.startsWith('http://localhost:') || origin === 'null') {
+    if (!origin) {
+      return 'http://localhost:8765';
+    }
+    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:') || origin === 'null') {
       return origin;
     }
     return 'http://localhost:8765';
@@ -49,6 +53,13 @@ function getProviderConfig(provider: string) {
   return PROVIDER_CONFIGS[provider];
 }
 
+function verifyReasonToMessage(reason?: VerifyReason): string | undefined {
+  if (!reason) return undefined;
+  if (reason === 'auth_failed') return 'API key 无效或权限不足';
+  if (reason === 'network_error') return '网络连接失败，请检查网络或代理设置';
+  return '模型不可用或当前 provider 暂不可用';
+}
+
 // 1. Chat Completions 接口
 app.post('/v1/chat/completions', async (c) => {
   try {
@@ -60,13 +71,23 @@ app.post('/v1/chat/completions', async (c) => {
       config.default_model,
       async (modelToTry) => {
         const { provider, model } = parseModelId(modelToTry);
-        const providerConfig = getProviderConfig(provider);
+        const providerConfig = getProviderConfig(provider) || (() => {
+          return undefined;
+        })();
+        const customProvider = !providerConfig
+          ? (await getConfig()).customProviders?.find(p => p.name === provider)
+          : undefined;
+        const dynamicProviderConfig = providerConfig || (customProvider
+          ? { baseURL: customProvider.baseURL, apiKeyEnv: '' }
+          : undefined);
         
-        if (!providerConfig) {
+        if (!dynamicProviderConfig) {
           return { success: false, error: { message: `Unknown provider: ${provider}` } };
         }
 
-        const apiKey = process.env[providerConfig.apiKeyEnv];
+        const apiKey = providerConfig
+          ? process.env[providerConfig.apiKeyEnv]
+          : customProvider?.apiKey;
         if (!apiKey) {
           return { success: false, error: { message: `API key not configured for ${provider}` } };
         }
@@ -92,7 +113,7 @@ app.post('/v1/chat/completions', async (c) => {
 
         try {
           const response = await fetchWithTimeout(
-            `${providerConfig.baseURL}/chat/completions`,
+            `${dynamicProviderConfig.baseURL}/chat/completions`,
             {
               method: 'POST',
               headers: proxyHeaders,
@@ -183,7 +204,9 @@ app.get('/admin/models', async (c) => {
       });
     }
     
-    // 直接从所有 provider 获取模型列表（不验证可用性）
+    const shouldRefresh = c.req.query('refresh') === 'true';
+
+    // 直接从所有 provider 获取模型列表
     const allModels = await fetchAllModels();
     
     // 过滤免费模型
@@ -198,6 +221,19 @@ app.get('/admin/models', async (c) => {
       const completion = parseFloat(String(m.pricing?.completion || '0'));
       return prompt === 0 && completion === 0;
     });
+
+    const verifiedMap = new Map<string, { verified: boolean; reason?: VerifyReason; lastCheckedAt: number }>();
+    if (shouldRefresh) {
+      await Promise.all(freeModels.map(async (model) => {
+        const parsed = parseModelId(model.id);
+        const availability = await verifyModelAvailability(parsed.provider, parsed.model);
+        verifiedMap.set(model.id, {
+          verified: availability.verified,
+          reason: availability.reason,
+          lastCheckedAt: availability.lastCheckedAt
+        });
+      }));
+    }
     
     const config = await getConfig();
 
@@ -207,7 +243,10 @@ app.get('/admin/models', async (c) => {
         name: model.name,
         provider: model.provider,
         context_length: model.context_length || 0,
-        is_recommended: false
+        is_recommended: false,
+        verified: verifiedMap.get(model.id)?.verified,
+        verify_reason: verifyReasonToMessage(verifiedMap.get(model.id)?.reason),
+        last_checked_at: verifiedMap.get(model.id)?.lastCheckedAt
       })),
       current: config.default_model,
       recommended: freeModels[0]?.id || null,
@@ -382,7 +421,7 @@ app.post('/api/custom-providers', async (c) => {
 // 5.4 添加自定义模型
 app.post('/api/custom-models', async (c) => {
   try {
-    const { provider, modelId } = await c.req.json();
+    const { provider, modelId, priority, enabled } = await c.req.json();
 
     if (!provider || !modelId) {
       return c.json({ success: false, error: 'Provider and modelId are required' }, 400);
@@ -413,7 +452,14 @@ app.post('/api/custom-models', async (c) => {
         return c.json({ success: false, error: 'Model not available' }, 400);
       }
 
-      await saveCustomModel({ provider, modelId, addedAt: Date.now() });
+      await saveCustomModel({
+        provider,
+        modelId,
+        addedAt: Date.now(),
+        priority: Number.isFinite(priority) ? Number(priority) : 100,
+        enabled: enabled !== false,
+        lastVerifiedAt: Date.now()
+      });
 
       return c.json({ success: true, model: modelId });
     } catch (err) {
@@ -424,6 +470,79 @@ app.post('/api/custom-models', async (c) => {
   }
 });
 
+// 5.5 验证手动模型
+app.post('/api/custom-models/verify', async (c) => {
+  try {
+    const { provider, modelId } = await c.req.json();
+    if (!provider || !modelId) {
+      return c.json({ success: false, error: 'Provider and modelId are required' }, 400);
+    }
+
+    const parsedProvider = String(provider);
+    const parsedModel = String(modelId);
+    const availability = await verifyModelAvailability(parsedProvider, parsedModel);
+
+    if (availability.verified) {
+      return c.json({ success: true, verified: true, last_checked_at: availability.lastCheckedAt });
+    }
+
+    return c.json({
+      success: false,
+      verified: false,
+      reason: availability.reason,
+      message: verifyReasonToMessage(availability.reason)
+    }, 400);
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message || 'Server error' }, 500);
+  }
+});
+
+// 5.6 获取手动模型
+app.get('/api/custom-models', async (c) => {
+  const customModels = await getCustomModels();
+  return c.json({ models: customModels });
+});
+
+// 5.7 删除手动模型
+app.delete('/api/custom-models/:provider/:modelId', async (c) => {
+  const provider = c.req.param('provider');
+  const modelId = decodeURIComponent(c.req.param('modelId'));
+  const deleted = await deleteCustomModel(provider, modelId);
+  if (!deleted) {
+    return c.json({ success: false, error: 'Model not found' }, 404);
+  }
+  return c.json({ success: true });
+});
+
+// 5.8 健康检查
+app.get('/api/health-check', async (c) => {
+  const keyStatus = await getAllProviderKeysStatus();
+  const providers = ['openrouter', 'groq', 'opencode'];
+
+  const providerHealth = await Promise.all(providers.map(async (provider) => {
+    const result = await validateProviderKey(provider);
+    return {
+      provider,
+      configured: keyStatus[provider]?.configured || false,
+      ok: result.ok,
+      reason: result.reason,
+      message: verifyReasonToMessage(result.reason)
+    };
+  }));
+
+  const hasAnyValidProvider = providerHealth.some(p => p.ok);
+  const openclaw = await detectOpenClawConfig();
+
+  return c.json({
+    success: hasAnyValidProvider,
+    provider_health: providerHealth,
+    openclaw,
+    hint: hasAnyValidProvider
+      ? '环境可用，建议在客户端执行 /model free_proxy/auto'
+      : '请先配置至少一个可用 provider key'
+  });
+});
+
 // 6. 检测 OpenClaw 配置
 app.get('/api/detect-openclaw', async (c) => {
   const status = await detectOpenClawConfig();
@@ -432,10 +551,11 @@ app.get('/api/detect-openclaw', async (c) => {
 
 // 7. 一键配置到 OpenClaw
 app.post('/api/configure-openclaw', async (c) => {
-  const status = await getApiKeyStatus();
+  const providerStatus = await getAllProviderKeysStatus();
+  const hasAnyConfigured = Object.values(providerStatus).some(s => s.configured);
   
-  if (!status.configured) {
-    return c.json({ success: false, error: 'Please validate your API key first' }, 400);
+  if (!hasAnyConfigured) {
+    return c.json({ success: false, error: 'Please configure at least one provider API key first' }, 400);
   }
   
   const result = await mergeConfig();

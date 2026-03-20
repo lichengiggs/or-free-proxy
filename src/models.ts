@@ -81,8 +81,8 @@ export async function fetchAllModels(): Promise<Model[]> {
 
       if (!response.ok) continue;
 
-      const data = await response.json();
-      const models: Model[] = (data.data || []).map((m: any) => ({
+      const data = await response.json() as { data?: Array<{ id: string; name?: string; context_length?: number; pricing?: { prompt?: string | number; completion?: string | number } }> };
+      const models: Model[] = (data.data || []).map((m) => ({
         id: m.id,
         name: m.name || m.id,
         provider: provider.name,
@@ -158,4 +158,14 @@ export function rankModels(models: OpenRouterModel[]): ModelScore[] {
 export function getRecommendedModel(models: OpenRouterModel[]): ModelScore | null {
   const ranked = rankModels(models);
   return ranked[0] || null;
+}
+
+export function isEffectivelyFreeModel(model: Pick<Model, 'id' | 'provider' | 'pricing'>): boolean {
+  if (model.provider === 'opencode') {
+    return model.id.endsWith('-free') || model.id.includes('-free-');
+  }
+
+  const prompt = parseFloat(String(model.pricing?.prompt || '0'));
+  const completion = parseFloat(String(model.pricing?.completion || '0'));
+  return prompt === 0 && completion === 0;
 }

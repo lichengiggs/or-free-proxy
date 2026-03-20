@@ -1,5 +1,6 @@
 import { isModelRateLimited, markModelRateLimited } from './rate-limit';
-import { fetchAllModels } from './models';
+import { fetchAllModels, isEffectivelyFreeModel } from './models';
+import { getCustomModels } from './config';
 import type { Model } from './providers/types';
 
 export interface FallbackResult {
@@ -71,21 +72,24 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
   }
 
   try {
+    const customModels = await getCustomModels();
+    for (const custom of customModels) {
+      if (!custom.enabled) continue;
+      const id = `${custom.provider}/${custom.modelId}`;
+      if (!chain.includes(id)) {
+        chain.push(id);
+      }
+    }
+  } catch (err) {
+    console.error('[Fallback] Failed to load custom models:', err);
+  }
+
+  try {
     // 获取所有 provider 的模型
     const allModels = await fetchAllModels();
     
     // 过滤免费模型
-    const freeModels = allModels.filter(m => {
-      // OpenCode 特殊处理：只保留带 -free 后缀的模型
-      if (m.provider === 'opencode') {
-        return m.id.endsWith('-free') || m.id.includes('-free-');
-      }
-      
-      // 其他 provider：按 pricing 判断
-      const prompt = parseFloat(String(m.pricing?.prompt || '0'));
-      const completion = parseFloat(String(m.pricing?.completion || '0'));
-      return prompt === 0 && completion === 0;
-    });
+    const freeModels = allModels.filter(m => isEffectivelyFreeModel(m));
     
     const ranked = rankAllModels(freeModels);
 

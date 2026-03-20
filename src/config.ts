@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, chmod } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import dotenv from 'dotenv';
 import { fetch as undiciFetch, ProxyAgent } from 'undici';
@@ -31,6 +31,9 @@ export interface CustomModel {
   provider: string;
   modelId: string;
   addedAt: number;
+  priority?: number;
+  enabled?: boolean;
+  lastVerifiedAt?: number;
 }
 
 const CONFIG_PATH = 'config.json';
@@ -75,6 +78,23 @@ export const ENV = {
   OPENCODE_API_KEY: process.env.OPENCODE_API_KEY || '',
   PORT: Number(process.env.PORT) || 8765
 };
+
+function getRuntimeEnv<T extends string | number>(key: string, fallback: T): T {
+  const value = process.env[key];
+  if (typeof fallback === 'number') {
+    return (value ? Number(value) : fallback) as T;
+  }
+  return (value || fallback) as T;
+}
+
+async function hardenEnvFilePermissions(): Promise<void> {
+  if (process.platform === 'win32' || !existsSync(ENV_PATH)) return;
+  try {
+    await chmod(ENV_PATH, 0o600);
+  } catch {
+    // 忽略权限设置失败，不影响主流程
+  }
+}
 
 const PROVIDER_ENV_MAP: Record<string, string> = {
   openrouter: 'OPENROUTER_API_KEY',
@@ -150,6 +170,7 @@ export async function saveProviderKey(provider: string, key: string): Promise<vo
     } else {
       await writeFile(ENV_PATH, keyLine + '\n', 'utf-8');
     }
+    await hardenEnvFilePermissions();
   });
 
   await writeLock;
@@ -172,12 +193,31 @@ export async function saveCustomModel(model: CustomModel): Promise<void> {
   const config = await getConfig();
   const customModels = config.customModels || [];
   const existingIndex = customModels.findIndex(m => m.provider === model.provider && m.modelId === model.modelId);
+  const normalized: CustomModel = {
+    ...model,
+    priority: Number.isFinite(model.priority) ? model.priority : 100,
+    enabled: model.enabled !== false
+  };
   if (existingIndex >= 0) {
-    customModels[existingIndex] = model;
+    customModels[existingIndex] = normalized;
   } else {
-    customModels.push(model);
+    customModels.push(normalized);
   }
   await setConfig({ ...config, customModels });
+}
+
+export async function getCustomModels(): Promise<CustomModel[]> {
+  const config = await getConfig();
+  return (config.customModels || []).slice().sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+}
+
+export async function deleteCustomModel(provider: string, modelId: string): Promise<boolean> {
+  const config = await getConfig();
+  const customModels = config.customModels || [];
+  const next = customModels.filter(m => !(m.provider === provider && m.modelId === modelId));
+  if (next.length === customModels.length) return false;
+  await setConfig({ ...config, customModels: next });
+  return true;
 }
 
 export interface ApiKeyStatus {
@@ -209,22 +249,11 @@ export async function saveApiKey(key: string): Promise<void> {
     throw new Error('Invalid API key format');
   }
   
-  const keyLine = `OPENROUTER_API_KEY=${trimmedKey}\n`;
-  const fileExists = existsSync(ENV_PATH);
-  
-  if (fileExists) {
-    const content = await readFile(ENV_PATH, 'utf-8');
-    const lines = content.split('\n').filter(line => !line.startsWith('OPENROUTER_API_KEY='));
-    await writeFile(ENV_PATH, lines.join('\n') + keyLine, 'utf-8');
-  } else {
-    await writeFile(ENV_PATH, keyLine, 'utf-8');
-  }
-  
-  process.env.OPENROUTER_API_KEY = trimmedKey;
+  await saveProviderKey('openrouter', trimmedKey);
 }
 
 export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
-  const key = ENV.OPENROUTER_API_KEY;
+  const key = getRuntimeEnv('OPENROUTER_API_KEY', '');
   if (!key && existsSync(ENV_PATH)) {
     try {
       const content = await readFile(ENV_PATH, 'utf-8');

@@ -158,6 +158,23 @@
       <button class="btn btn-secondary" id="refreshModelsBtn" onclick="refreshModels()" style="margin-bottom: 1rem;">刷新模型列表</button>
       <ul class="model-list" id="modelList"></ul>
     </div>
+
+    <div class="custom-card">
+      <div class="custom-card-header">
+        <strong>手动添加模型（限时免费/价格字段不准确时使用）</strong>
+      </div>
+      <div class="provider-key-form" style="margin-bottom: 0.5rem;">
+        <select id="customModelProvider" class="input" style="max-width: 180px; margin-bottom: 0;">
+          <option value="openrouter">OpenRouter</option>
+          <option value="groq">Groq</option>
+          <option value="opencode">OpenCode</option>
+        </select>
+        <input id="customModelId" class="input" placeholder="例如 meta-llama/llama-3.3-70b-instruct" autocomplete="off" style="margin-bottom: 0;">
+        <button class="btn btn-primary" onclick="verifyAndSaveCustomModel()">验证并添加</button>
+      </div>
+      <div id="customModelStatus" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 0.5rem;"></div>
+      <div id="customModelList"></div>
+    </div>
     
     <div style="margin-top: 1rem; padding: 0.75rem; background: #f3f4f6; border-radius: 6px; font-size: 0.875rem;">
       在 OpenClaw 中使用：<code style="background: #e5e7eb; padding: 0.125rem 0.375rem; border-radius: 4px;">/model free_proxy/auto</code>
@@ -270,7 +287,8 @@
           showToast(data.error || '保存失败', 'error');
         }
       } catch (err) {
-        showToast('网络错误', 'error');
+        console.error('saveProviderKey failed:', err);
+        showToast('网络错误：请确认服务运行在 http://localhost:8765，或改用 localhost 访问页面', 'error');
       } finally {
         btn.disabled = false;
         btn.textContent = '保存';
@@ -297,6 +315,7 @@
           : allModels.filter(m => m.provider === currentProviderFilter);
         
         renderModels(filteredModels, data.current);
+        loadCustomModels();
       } catch (err) {
         showToast('加载模型列表失败', 'error');
       }
@@ -349,9 +368,11 @@
             <div class="model-name">
               ${model.name}
               ${model.is_recommended ? '<span class="badge">推荐</span>' : ''}
+              ${model.verified === true ? '<span class="badge" style="background:#059669;">已验证</span>' : ''}
+              ${model.verified === false ? '<span class="badge" style="background:#d97706;">待确认</span>' : ''}
               <span class="badge current-badge" style="background: #2563eb; display: ${isCurrent ? 'inline' : 'none'};">当前</span>
             </div>
-            <div class="model-id">${model.id}</div>
+            <div class="model-id">${model.id}${model.verify_reason ? ` · ${model.verify_reason}` : ''}</div>
           </div>
           <button class="btn btn-primary select-btn" ${isCurrent ? 'disabled' : ''} onclick="selectModel('${model.id}')">
             ${isCurrent ? '已选择' : '选择'}
@@ -366,6 +387,87 @@
       if (current) {
         currentModelName.textContent = `${current.name} (${current.id})`;
         currentModelEl.style.display = 'block';
+      }
+    }
+
+    async function loadCustomModels() {
+      try {
+        const res = await fetch('/api/custom-models');
+        const data = await res.json();
+        const container = document.getElementById('customModelList');
+        const models = data.models || [];
+        if (models.length === 0) {
+          container.innerHTML = '<div style="font-size:0.875rem;color:#6b7280;">暂无手动模型</div>';
+          return;
+        }
+        container.innerHTML = models.map(m => {
+          const id = `${m.provider}/${m.modelId}`;
+          return `<div class="backup-item"><span style="font-size:0.875rem;color:#374151;">${id}</span><button class="btn btn-secondary btn-sm" onclick="removeCustomModel('${m.provider}','${encodeURIComponent(m.modelId)}')">删除</button></div>`;
+        }).join('');
+      } catch {
+        // ignore
+      }
+    }
+
+    async function verifyAndSaveCustomModel() {
+      const provider = document.getElementById('customModelProvider').value;
+      const modelId = document.getElementById('customModelId').value.trim();
+      const statusEl = document.getElementById('customModelStatus');
+
+      if (!modelId) {
+        showToast('请输入模型 ID', 'error');
+        return;
+      }
+
+      statusEl.textContent = '正在验证模型可用性...';
+      try {
+        const verifyRes = await fetch('/api/custom-models/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, modelId })
+        });
+        const verifyData = await verifyRes.json();
+        if (!verifyRes.ok || !verifyData.verified) {
+          statusEl.textContent = verifyData.message || '模型验证失败';
+          showToast(statusEl.textContent, 'error');
+          return;
+        }
+
+        const saveRes = await fetch('/api/custom-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, modelId, priority: 50, enabled: true })
+        });
+        const saveData = await saveRes.json();
+        if (!saveRes.ok || !saveData.success) {
+          showToast(saveData.error || '保存失败', 'error');
+          return;
+        }
+
+        statusEl.textContent = '模型已验证并添加到候选列表';
+        showToast('手动模型添加成功');
+        document.getElementById('customModelId').value = '';
+        loadCustomModels();
+      } catch {
+        statusEl.textContent = '网络异常，请稍后重试';
+        showToast('操作失败', 'error');
+      }
+    }
+
+    async function removeCustomModel(provider, encodedModelId) {
+      try {
+        const res = await fetch(`/api/custom-models/${provider}/${encodedModelId}`, {
+          method: 'DELETE'
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast('已删除');
+          loadCustomModels();
+        } else {
+          showToast(data.error || '删除失败', 'error');
+        }
+      } catch {
+        showToast('删除失败', 'error');
       }
     }
     
@@ -515,6 +617,7 @@
     // Initialize
     loadProviderKeysStatus();
     checkOpenClawStatus();
+    loadCustomModels();
   </script>
 </body>
 </html>

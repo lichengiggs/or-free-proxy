@@ -1,16 +1,22 @@
 # or-free-proxy
 
-免费用 AI 模型的代理工具。不用管哪个模型能用，它会自动帮你找能用的。
+[中文](README.md) | [English](README_EN.md)
 
-## 有什么用？
+一个本地 AI 代理工具：聚合 OpenRouter / Groq / OpenCode 的可用模型，自动回退，减少手动换模型。
 
-**痛点：** OpenRouter、Groq、OpenCode 上面有很多免费模型，但经常这个不能用、那个被限流，要手动换来换去很麻烦。
+适合个人使用，目标是「能稳定用上免费或低成本模型」。
 
-**解决：** 这个工具会自动从多个提供商获取免费模型，帮你逐个尝试，直到找到能用的为止。
+## 功能
 
-## 三步上手
+- 多 provider 支持：OpenRouter、Groq、OpenCode
+- 自动回退：当前模型失败时自动尝试其他可用模型
+- 手动添加模型：可添加临时免费或价格字段不准的模型
+- 本地配置页面：保存 API Key、选模型、更新 OpenClaw 配置
+- OpenAI 兼容接口：`http://localhost:8765/v1`
 
-### 1. 安装
+## 快速开始（3 步）
+
+1) 安装依赖
 
 ```bash
 git clone https://github.com/lichengiggs/or-free-proxy.git
@@ -18,87 +24,97 @@ cd or-free-proxy
 npm install
 ```
 
-### 2. 启动
+2) 启动服务
 
 ```bash
 npm start
 ```
 
-会看到提示：服务已启动 http://localhost:8765
+3) 打开配置页面
 
-### 3. 配置
+- 浏览器访问：`http://localhost:8765`
+- 至少保存 1 个 provider 的 API Key
+- 选择模型（推荐 `openrouter/auto:free`）
 
-打开浏览器访问 http://localhost:8765
+## 页面怎么用（小白版）
 
-**第一步：** 填 API Key（至少填一个）
-- **OpenRouter**（推荐，完全免费）：去 https://openrouter.ai/keys 注册（免费），复制你的 Key
-- **Groq**（完全免费，需要梯子才能访问）：去 https://console.groq.com/keys 注册，复制你的 Key
-- **OpenCode**（还没调通，不知道是不是得充值才能用zen的免费模型）：去 https://opencode.ai/auth 注册，复制你的 Key
+### 第一步：保存 API Key（至少一个）
 
+- OpenRouter: https://openrouter.ai/keys
+- Groq: https://console.groq.com/keys
+- OpenCode: https://opencode.ai/auth
 
+说明：
+- 三个 provider 都支持。
+- 你只配置一个也能使用。
 
-填好后点"保存"
+### 第二步：选模型
 
-**第二步：** 选模型
-- 页面会显示当前能用的模型（已验证过）
-- 选你想用的，点"选择"
-- 推荐用 `auto`，它会自动选也许最好的（一个朴素的排序）
+- 点“刷新模型列表”加载可用模型
+- 选一个你要用的模型，点“选择”
+- 不确定就选 `openrouter/auto:free`
 
-**第三步（如果用 OpenClaw）：**
-- 点"更新 OpenClaw 配置"
-- 然后在 OpenClaw 里执行 `/model free_proxy/auto`
+### 第三步：必要时手动添加模型
 
-## 用好了
+如果某个模型你确认可用，但列表里没出现：
 
-现在你的 AI 客户端（OpenClaw、Cursor 等）配置成：
+- 在“手动添加模型”中填写 `provider + modelId`
+- 点击“验证并添加”
+- 验证通过后，该模型会进入候选并参与自动回退
 
-```json
-{
-  "provider": {
-    "free_proxy": {
-      "name": "free_proxy",
-      "options": {
-        "baseURL": "http://127.0.0.1:8765/v1",
-        "apiKey": "sk-not-needed"
-      },
-      "models": {
-        "auto": {
-          "name": "auto"
-        }
-      }
-    }
-  }
-}
+## 给客户端使用
+
+任何支持 OpenAI API 的客户端都可以：OpenClaw、Cursor、Continue 等。
+
+Base URL:
+
+```txt
+http://localhost:8765/v1
 ```
 
-API Key 随便填，模型名也随便填，工具会自动处理。
+API Key:
+
+- 客户端侧可填任意非空字符串（真正调用时由本代理转发到你保存的 provider key）
+
+## OpenClaw（可选）
+
+配置页面提供“更新 OpenClaw 配置”按钮，会自动写入 `~/.openclaw/openclaw.json` 并做备份。
 
 ## 常见问题
 
-**Q: 为什么显示"无可用模型"？**
-A: 免费模型有使用限制，等几分钟再刷新试试。
+### 1) 保存 API Key 提示“网络错误”
 
+- 请确认服务已启动：`npm start`
+- 建议用 `http://localhost:8765` 打开页面（不要混用 127.0.0.1）
 
-**Q: 支持哪些客户端？**
-A: 任何支持 OpenAI API 格式的客户端都可以：OpenClaw、Cursor、Continue 等。
+### 2) 提示“无可用模型”
 
-**Q: API Key 存在哪里？**
-A: 存在本地 `.env` 文件，不会上传到任何地方。
+- 免费模型会临时限流，先刷新模型列表再试
+- 或手动添加一个你确认可用的模型
 
-## 命令速查
+### 3) API Key 存在哪里？
+
+- 存在项目根目录 `.env`（本地文件）
+- 不会自动上传
+
+## 开发命令
 
 ```bash
-# 启动服务
+# 启动
 npm start
 
-# 停止服务
-Ctrl + C
+# 测试
+npm test
 
-# 更新代码
-git pull
-npm install
+# 类型检查
+npx tsc --noEmit
 ```
 
-## 开源协议
+## 安全提醒
 
-MIT - 随便用
+- 不要把 `.env` 提交到 GitHub
+- 推送前先检查 `git status`
+
+## License
+
+MIT

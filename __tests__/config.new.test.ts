@@ -1,15 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { saveApiKey, getApiKeyStatus, maskApiKey } from '../src/config';
-import { existsSync, unlinkSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, unlinkSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
 
 const ENV_PATH = join(process.cwd(), '.env');
 const ENV_BACKUP_PATH = join(process.cwd(), '.env.test.backup');
+const ORIGINAL_OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 
 describe('Config - API Key Management', () => {
   beforeEach(() => {
+    delete process.env.OPENROUTER_API_KEY;
     // 备份现有 .env 文件
     if (existsSync(ENV_PATH)) {
       const content = readFileSync(ENV_PATH, 'utf-8');
@@ -26,6 +26,11 @@ describe('Config - API Key Management', () => {
       unlinkSync(ENV_BACKUP_PATH);
     } else if (existsSync(ENV_PATH)) {
       unlinkSync(ENV_PATH);
+    }
+    if (ORIGINAL_OPENROUTER_KEY) {
+      process.env.OPENROUTER_API_KEY = ORIGINAL_OPENROUTER_KEY;
+    } else {
+      delete process.env.OPENROUTER_API_KEY;
     }
   });
 
@@ -70,8 +75,8 @@ describe('Config - API Key Management', () => {
       
       // 在 Windows 上跳过权限检查
       if (process.platform !== 'win32') {
-        const stats = execSync(`stat -f "%Lp" "${ENV_PATH}"`, { encoding: 'utf-8' }).trim();
-        expect(stats).toBe('600');
+        const mode = statSync(ENV_PATH).mode & 0o777;
+        expect(mode).toBe(0o600);
       }
     });
 
@@ -101,7 +106,7 @@ describe('Config - API Key Management', () => {
       
       expect(status).toEqual({
         configured: true,
-        masked: 'sk-****456'
+        masked: 'sk-***456'
       });
     });
 
@@ -120,12 +125,12 @@ describe('Config - API Key Management', () => {
   describe('maskApiKey', () => {
     test('should mask API key correctly', () => {
       const result = maskApiKey('sk-test123456789');
-      expect(result).toBe('sk-****789');
+      expect(result).toBe('sk-***789');
     });
 
     test('should handle short API keys', () => {
       const result = maskApiKey('sk-abc');
-      expect(result).toBe('sk-****abc');
+      expect(result).toBe('sk-***abc');
     });
 
     test('should return null for empty input', () => {
