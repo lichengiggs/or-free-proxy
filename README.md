@@ -8,10 +8,10 @@
 
 ## 功能
 
-- 多 provider 支持：OpenRouter、Groq、OpenCode、Gemini、GitHub Models、Mistral、Cerebras、SambaNova
+- 8 个 provider 支持：OpenRouter、Groq、OpenCode、Gemini、GitHub Models、Mistral、Cerebras、SambaNova
 - 自动回退：当前模型失败时自动尝试其他可用模型
-- 手动添加模型：可添加临时免费或价格字段不准的模型
-- 本地配置页面：保存 API Key、选模型、更新 OpenClaw 配置
+- 手动添加模型：可直接添加临时免费或价格字段不准的模型
+- 本地配置页面：卡片式保存 API Key、直接选模型、更新 OpenClaw 配置
 - OpenAI 兼容接口：`http://localhost:8765/v1`
 
 ## 快速开始（3 步）
@@ -50,7 +50,7 @@ npm start
 - SambaNova: https://cloud.sambanova.ai/
 
 说明：
-- 三个 provider 都支持。
+- 现在支持 8 个 provider。
 - 你只配置一个也能使用。
 
 ### 第二步：选模型
@@ -64,8 +64,8 @@ npm start
 如果某个模型你确认可用，但列表里没出现：
 
 - 在“手动添加模型”中填写 `provider + modelId`
-- 点击“验证并添加”
-- 验证通过后，该模型会进入候选并参与自动回退
+- 点击“添加”
+- 系统会直接保存，后续由自动回退兜底
 
 ## 给客户端使用
 
@@ -134,7 +134,7 @@ npx tsc --noEmit
 
 ### 当前架构做了什么
 
-- 前端只负责配置和选模型。
+- 前端只负责配置和直接选模型。
 - 后端负责三件事：
   - 拉取各 provider 模型列表
   - 请求转发（OpenAI 兼容接口）
@@ -154,9 +154,9 @@ npx tsc --noEmit
   - fallback 关键路径与限流清理
   - 模型识别与归一化逻辑
   - 多 provider 的基础 API 行为
-- 当前本地结果：
-  - `npm test` 全绿
-  - `npx tsc --noEmit` 通过
+- 发布前建议再运行一次：
+  - `npm test`
+  - `npx tsc --noEmit`
 
 如果你是第一次接触这类代理，可以这样理解：
 

@@ -1,308 +1,506 @@
-# free_proxy 深度学习与发现报告
+# Free Proxy 深度研究报告
 
-## 1. 项目定位与目标
+## 1. 项目概述
 
-这是一个本地运行的「OpenAI 兼容代理」，目标不是做统一计费或统一鉴权，而是解决一个非常具体的问题：
-
-- 免费模型很多，但**可用性不稳定**（限流、临时下线、区域网络问题）
-- 用户不想每次手动切换模型和 provider
-- 希望客户端（OpenClaw / Cursor / Continue）始终只连一个固定本地地址
-
-该项目通过 `http://localhost:8765/v1` 提供 OpenAI 风格接口，在内部做多 provider 模型发现 + 失败回退。
+**项目名称**：Free Proxy (`free_proxy`)  
+**核心目的**：本地多 Provider 免费 AI 模型代理服务  
+**技术栈**：TypeScript + Hono + Jest 30 + tsx  
+**运行环境**：Node.js (ESM 模式)  
 
 ---
 
-## 2. 技术栈与工程形态
+## 2. 核心架构
 
-- 后端框架：`hono` + `@hono/node-server`
-- 语言：TypeScript（ESM）
-- 运行方式：`tsx src/server.ts`
-- 测试：Jest + ts-jest（ESM 模式）
-- 网络层：原生 `fetch` + `undici`（支持代理）
-- 前端：单文件 `public/index.html`（原生 HTML/CSS/JS，无打包）
+### 2.1 入口与路由层
 
-工程形态是典型轻量化工具：
+- **入口文件**：`src/server.ts`
+- **HTTP 框架**：Hono (轻量级、高性能的边缘计算框架)
+- **启动方式**：`tsx src/server.ts` 或 `tsx watch src/server.ts` (开发模式)
+- **端口**：默认 8765，可通过 `PORT` 环境变量配置
 
-- 无数据库
-- 本地文件持久化（`.env`, `config.json`, `rate-limit-state.json`）
-- 单进程内存状态辅助（模型可用性 Map、配置缓存等）
+**关键路由**：
+- `POST /v1/chat/completions` — 核心代理转发接口
+- `GET /admin/models` — 获取所有可用模型列表
+- `PUT /admin/model` — 切换默认模型
+- `POST /api/provider-keys` — 验证并保存 Provider Key
+- `GET /api/provider-keys` — 获取所有 Provider Key 状态
+- `POST /api/validate-key` — OpenRouter 专用 Key 验证
+- `GET /api/health-check` — 健康检查
+- `GET/POST/DELETE /api/custom-models` — 自定义模型 CRUD
+- `GET/POST /api/detect-openclaw` — 检测和配置 OpenClaw
 
----
+### 2.2 配置管理层 (`src/config.ts`)
 
-## 3. 目录与模块职责
+**配置存储**：
+- `config.json` — 应用配置（默认模型、自定义 Provider/Model）
+- `.env` — 环境变量（API Keys）
+- `rate-limit-state.json` — 限流状态持久化
 
-### 3.1 核心目录
+**核心功能**：
+1. **Provider Key 管理**：支持 8 个 Provider 的 Key 存储/读取/掩码
+2. **Key 状态查询**：`getAllProviderKeysStatus()` 返回所有 Provider 的配置状态
+3. **Key 掩码显示**：`maskApiKey()` 支持 `sk-or-` (6位前缀)、`gsk-` (4位)、其他 (3位) 三种格式
+4. **HTTP 代理支持**：自动检测 `https_proxy`/`http_proxy` 环境变量，使用 undici 的 ProxyAgent
+5. **文件写入锁**：防止并发写入 `.env` 文件冲突
+6. **权限加固**：自动设置 `.env` 文件权限为 0o600 (仅所有者可读写)
 
-- `src/server.ts`：HTTP 路由入口，代理请求与管理 API
-- `src/config.ts`：配置读写、环境变量、API Key 管理、带超时请求封装
-- `src/models.ts`：模型拉取、免费过滤、评分排序（含多 provider 拉取）
-- `src/fallback.ts`：模型回退链构建 + 执行器
-- `src/rate-limit.ts`：限流状态持久化与冷却判断
-- `src/openclaw-config.ts`：检测/合并/备份/恢复 OpenClaw 配置
-- `src/providers/*`：provider 注册表与抽象（当前只部分接入）
-- `public/index.html`：管理 UI（配置 key、选模型、配置 OpenClaw）
+### 2.3 Provider 注册中心 (`src/providers/registry.ts`)
 
-### 3.2 其他模块状态
+**已注册 Provider**：
 
-- `src/candidate-pool.ts`：实现了候选模型池与主动验证，但**当前主流程未使用**
-- `src/providers/router.ts`、`src/providers/adapters/openai.ts`：有抽象层，但 `server.ts` 目前走自定义流程，未复用 router
+| Provider | Base URL | API Key Env | Format | 免费？ |
+|----------|----------|-------------|--------|--------|
+| openrouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | openai | ✓ |
+| groq | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | openai | ✓ |
+| opencode | `https://opencode.ai/zen/v1` | `OPENCODE_API_KEY` | openai | ✓ |
+| gemini | `https://generativelanguage.googleapis.com/v1beta` | `GEMINI_API_KEY` | gemini | ✓ |
+| github | `https://models.github.ai/inference` | `GITHUB_MODELS_API_KEY` | openai | ✓ |
+| mistral | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` | openai | ✓ |
+| cerebras | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` | openai | ✓ |
+| sambanova | `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` | openai | ✓ |
 
-结论：项目有一部分“已上线主路径”和一部分“演进中的抽象层”，存在代码路径分叉。
+**Gemini 特殊处理**：Gemini 使用 Google 原生 `generateContent` API，而非 OpenAI 兼容格式。这导致了项目中多处存在 Gemini 特殊分支逻辑。
 
----
+### 2.4 模型发现与过滤 (`src/models.ts`)
 
-## 4. 端到端工作原理（请求路径）
+**核心流程**：
+1. **模型获取**：`fetchAllModels()` 并行请求所有 Provider 的 `/models` 端点
+2. **缓存机制**：每个 Provider 独立缓存，TTL 5 分钟
+3. **模型过滤**：按 Provider 类型使用不同过滤策略：
+   - **OpenRouter**：只显示免费模型（`pricing.prompt === 0 && pricing.completion === 0`）
+   - **OpenCode**：只显示带 `-free` 后缀的模型
+   - **Gemini**：硬编码白名单 `gemini-3.1-flash-lite-preview`、`gemma-3-27b-it`
+   - **GitHub**：按任务类型、模型家族、名称关键词过滤聊天模型
+   - **其他**：按 `isChatModel()` 判断是否为聊天模型
 
-## 4.1 启动
+**模型 ID 标准化**：
+- `normalizeGeminiModelId()` — 移除 `models/` 前缀
+- `normalizeGithubModelId()` — 从 `/models/{id}/` 路径提取 ID
+- `normalizeOpenCodeModelId()` — 移除 `models/` 前缀
 
-`npm start` -> `src/server.ts` 启动 Hono 服务：
+**回退模型**：当 API 请求失败时，各 Provider 有硬编码的回退模型列表，确保至少有一个模型可用。
 
-- 配置 CORS
-- 挂载静态页面（`public/index.html`）
-- 暴露 `/v1/chat/completions` 与一组 `/admin/*`、`/api/*` 管理接口
+**模型评分系统**：
+- 上下文长度评分 (0-40 分)
+- Provider 信任度评分 (0-30 分)
+- 参数量评分 (0-20 分)
+- 综合排序，推荐最优模型
 
-## 4.2 模型调用主链
+### 2.5 智能路由与回退机制 (`src/fallback.ts`)
 
-客户端请求 `/v1/chat/completions` 后，核心流程：
+**回退链构建** (`getFallbackChain()`)：
+1. 首选模型（用户指定）
+2. 自定义模型（按优先级排序）
+3. 同 Provider 已验证模型
+4. 全局评分最高的已验证模型
+5. 其他已验证模型
+6. 未验证模型
+7. `openrouter/auto:free`（兜底选项）
 
-1. 读取当前默认模型（`config.default_model`）
-2. 调用 `executeWithFallback(...)`
-3. `fallback.ts` 生成回退链：
-   - 首先放入首选模型
-   - 再动态拉取所有 provider 可用模型并按评分排序
-   - 最后保证 `openrouter/auto:free` 在链尾
-4. 逐个尝试模型：
-   - 429/503 失败会写入 rate-limit 状态
-   - 命中成功立即返回
-5. 响应附加诊断头：
-   - `X-Actual-Model`
-   - `X-Fallback-Used`
-   - `X-Fallback-Reason`
+**执行回退** (`executeWithFallback()`)：
+- 遍历回退链，逐个尝试
+- 跳过限流模型（`isModelRateLimited()`）
+- 成功时标记模型可用，失败时标记不可用
+- 支持 429/503 错误自动限流标记
+- 所有失败时抛出详细错误信息，包含已尝试列表
 
-## 4.3 provider 解析规则
+**模型评分维度**：
+- **稳定性**：OpenRouter/GitHub 最高，Groq/Mistral 次之
+- **能力**：70B+ 模型 20 分，8B/mini 10 分
+- **速度**：flash/lite 最快，70B/72B 较慢
+- **上下文**：32K+ 最高，8K+ 标准
+- **领域**：codestral/deepseek/qwen 编程能力强
+- **白名单**：gpt-4o、llama-3.1-8b、codestral 等加分
+- **黑名单**：gpt-3.5、tiny、deprecated 减分
 
-- 模型 ID 形如 `openrouter/xxx`、`groq/xxx`、`opencode/xxx` 时按前缀路由
-- 否则默认按 openrouter 处理
+### 2.6 限流管理 (`src/rate-limit.ts`)
 
-这让前端可直接选择“带 provider 前缀”的模型，实现跨 provider 透明切换。
+**核心机制**：
+- **持久化存储**：`rate-limit-state.json` 文件
+- **内存缓存**：`memoryState` 避免重复文件读取
+- **冷却时间**：30 分钟（`RATE_LIMIT_COOLDOWN_MINUTES`）
+- **限流类型**：`rate_limit`、`unavailable`、`error`
+- **自动清理**：`cleanExpiredRateLimits()` 清除过期记录
 
----
+### 2.7 Provider 健康检查 (`src/provider-health.ts`)
 
-## 5. 核心模块拆解
+**验证类型**：
+- `validateProviderKey()` — 验证 Provider Key 是否有效
+- `validateProviderKeyWithKey()` — 使用指定 Key 验证
+- `verifyModelAvailability()` — 验证特定模型是否可用
 
-## 5.1 配置与密钥管理（`src/config.ts`）
+**验证逻辑**：
+- **Gemini**：使用 `POST /{model}:generateContent` 端点，发送 `ping` 消息
+- **其他 Provider**：使用 `POST /chat/completions` 端点，发送 `ping` 消息
+- **错误分类**：401/403 → `auth_failed`，其他 → `model_unavailable`，网络错误 → `network_error`
 
-### 做得好的点
+**HTTP 头构建**：
+- **Gemini**：`x-goog-api-key` 头
+- **OpenRouter**：`Authorization: Bearer` + `HTTP-Referer` + `X-Title`
+- **其他**：`Authorization: Bearer`
 
-- `getConfig()`：首次无 `config.json` 时自动写默认配置
-- `setConfig()`：增量合并后落盘
-- `saveProviderKey()`：使用 `writeLock` 串行写 `.env`，避免并发覆写
-- `maskApiKey()`：按 key 前缀差异化掩码（`sk-or-`、`gsk-` 等）
-- `fetchWithTimeout()`：内置超时与代理支持（`HTTP_PROXY` / `HTTPS_PROXY`）
+### 2.8 OpenClaw 集成 (`src/openclaw-config.ts`)
 
-### 需要注意的点
+**功能**：
+- **检测**：检查 `~/.openclaw/openclaw.json` 是否存在且有效
+- **配置**：自动创建/更新 OpenClaw 配置，添加 `free_proxy` provider
+- **备份**：修改前自动创建备份（`openclaw.bak1`, `openclaw.bak2`, ...）
+- **恢复**：支持从备份恢复配置
 
-- `ENV` 是模块加载时快照，不是实时读取 `process.env`；部分状态读取会“旧值”
-- `saveApiKey()`（旧接口）没有复用写锁
-- `.env` 写入未显式设置文件权限（测试里有权限预期）
+**配置格式**：
+```json
+{
+  "models": {
+    "providers": {
+      "free_proxy": {
+        "baseUrl": "http://localhost:8765/v1",
+        "apiKey": "any_string",
+        "api": "openai-completions",
+        "models": [{ "id": "auto", "name": "auto" }]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "models": {
+        "free_proxy/auto": {}
+      }
+    }
+  }
+}
+```
 
-## 5.2 模型拉取与评分（`src/models.ts`）
+### 2.9 候选模型池 (`src/candidate-pool.ts`)
 
-主要能力：
+**功能**：
+- **验证模型**：通过实际调用 API 验证模型是否可用
+- **候选池管理**：维护已验证模型的列表
+- **失败追踪**：记录模型失败次数，失败模型自动移除
+- **手动添加**：支持手动添加模型到候选池
 
-- `fetchModels()`：OpenRouter 模型拉取 + 1 小时缓存
-- `fetchAllModels()`：按已配置 key 遍历 provider 拉取 `/models`，并统一成 `provider/model` ID
-- 免费过滤策略：
-  - 常规：`prompt=0` 且 `completion=0`
-  - OpenCode：另有 `-free` 后缀规则（在其他模块重复实现）
-- 排序维度：
-  - 上下文长度（最高 40）
-  - 可信 provider（最高 30）
-  - 参数规模（最高 20）
+### 2.10 Provider 适配器层 (`src/providers/adapters/openai.ts`)
 
-## 5.3 回退执行（`src/fallback.ts`）
+**设计模式**：适配器模式
+- **OpenAIAdapter**：统一处理 OpenAI 兼容 API 和 Gemini API
+- **Gemini 特殊逻辑**：
+  - URL 构建：`/models/{model}:generateContent`
+  - 请求体转换：`messages` → `contents` + `parts`
+  - 认证头：`x-goog-api-key` 而非 `Authorization: Bearer`
+  - 模型 ID 标准化：添加 `models/` 前缀
 
-这是项目最关键模块，解决“免费模型波动”问题：
+### 2.11 Provider 路由器 (`src/providers/router.ts`)
 
-- 结合三种状态：
-  1) 动态可用性（内存 `modelAvailability`）
-  2) 速率限制持久化状态（`rate-limit.ts`）
-  3) 实时请求结果（429/503/其他失败）
-- 首选失败时自动尝试候选链
-- 会记录尝试轨迹（`attempted_models`）并告知 fallback 原因
-
-设计取舍：
-
-- 简洁有效，优先“尽快拿到一个可用回答”
-- 不做复杂熔断窗口/统计学习，维护成本低
-
-## 5.4 限流状态（`src/rate-limit.ts`）
-
-- 文件：`rate-limit-state.json`
-- 结构：按模型 ID 存 `limited_at`、`retry_after`、`reason`
-- 冷却策略：固定 30 分钟
-- 支持清理过期记录
-
-价值：跨进程重启仍保留短期“失败记忆”，避免重复撞同一限流模型。
-
-## 5.5 OpenClaw 配置集成（`src/openclaw-config.ts`）
-
-能力：
-
-- 自动定位：`~/.openclaw/openclaw.json`
-- 检测存在性和 JSON 有效性
-- 修改前自动备份
-- 合并注入 `free_proxy` provider 和 `free_proxy/auto` 模型
-- 支持列出备份、从备份恢复
-
-该模块的核心价值是降低手工配置成本，符合“个人工具”定位。
-
----
-
-## 6. HTTP 接口清单与行为细节
-
-### 6.1 代理接口
-
-- `POST /v1/chat/completions`
-  - 输入：OpenAI 格式 body
-  - 输出：上游原始 JSON/流式响应
-  - 额外头：`X-Actual-Model`、`X-Fallback-Used`、`X-Fallback-Reason`
-
-### 6.2 管理模型
-
-- `GET /admin/models`
-  - 拉取所有已配置 provider 的免费模型（当前不做逐个可用性验证）
-- `PUT /admin/model`
-  - 设置默认模型到 `config.json`
-
-### 6.3 密钥管理
-
-- `GET /api/provider-keys`
-  - 返回 openrouter/groq/opencode 配置状态（已掩码）
-- `POST /api/provider-keys`
-  - 先调用对应 provider `/models` 验证，再写入 `.env`
-
-兼容旧接口（偏 OpenRouter 单 provider）：
-
-- `POST /api/validate-key`
-- `GET /api/validate-key`
-
-### 6.4 OpenClaw 管理
-
-- `GET /api/detect-openclaw`
-- `POST /api/configure-openclaw`
-- `GET /api/backups`
-- `POST /api/restore-backup`
-
----
-
-## 7. 前端页面（`public/index.html`）工作机制
-
-页面是三步流程：
-
-1. 配置 provider key（OpenRouter/Groq/OpenCode）
-2. 拉取并筛选模型，支持按 provider tab 切换
-3. 自动配置 OpenClaw，并可查看/恢复备份
-
-前端特点：
-
-- 纯原生 JS，状态集中在少量全局变量（`allModels`, `currentProviderFilter`）
-- 关键操作均有按钮 loading 态和 toast 提示
-- 模型选择后做本地 UI 更新，不重复请求模型列表（体验更快）
+**功能**：
+- **模型解析**：`parseModelId()` 解析 `provider/model` 格式
+- **Provider 选择**：`getAvailableProviders()` 获取已配置 Key 的 Provider
+- **回退执行**：`executeWithFallback()` 在 Provider 失败时自动切换
+- **失败计数**：连续失败 3 次自动跳过该 Provider
 
 ---
 
-## 8. 测试覆盖现状与一致性评估
+## 3. 前端界面 (`public/index.html`)
 
-测试文件较多（配置、模型、fallback、provider、openclaw、API 路由），但当前存在明显“实现-测试漂移”。
+### 3.1 功能模块
 
-我本地执行 `npm test -- --runInBand` 的结果：
+1. **Provider 配置区**：
+   - 8 个 Provider 卡片网格，每个包含：
+     - Provider 名称和免费/部分免费标签
+     - API Key 输入框和保存按钮
+     - 已配置状态显示和修改按钮
+     - 获取 Key 的链接
 
-- 14 个测试套件中 4 个失败
-- 127 个用例中 35 个失败
+2. **模型选择区**：
+    - Provider 筛选标签页（全部 + 8 个 Provider）
+    - 模型列表（显示名称、ID、当前选择）
+    - 刷新模型列表按钮
+    - 手动添加模型表单（支持选择 Provider、输入模型 ID、直接添加）
 
-核心漂移点：
+3. **OpenClaw 配置区**：
+   - OpenClaw 状态检测
+   - 一键配置按钮
+   - 备份列表和恢复功能
 
-1. **掩码规则变化**
-   - 实现：`sk-***456`
-   - 部分测试仍期望：`sk-****456`
+### 3.2 交互流程
 
-2. **OpenClaw 备份文件名模式变化**
-   - 实现使用：`openclaw.bakN`
-   - 多个测试仍按：`openclaw.json.backup.timestamp`
-
-3. **不存在的导出被测试引用**
-   - `__tests__/models.new.test.ts` 依赖 `getModels`，但 `src/models.ts` 并未导出
-
-4. **路由语义变化导致断言过期**
-   - 例如 `/api/validate-key` 错误文案、状态码期望与当前实现不一致
-
-5. **测试环境清理逻辑不兼容当前产物**
-   - 清理 `.openclaw-test` 目录时只删特定文件模式，导致 `rmdir` 失败
-
-结论：测试体系有价值，但目前不能作为“真实回归门禁”，需要先统一协议与命名后修复。
-
----
-
-## 9. 关键发现（设计优点）
-
-1. **最有价值能力是“失败自动回退”**，不是模型排序本身
-2. **多 provider 统一前缀模型 ID** 是正确抽象，兼顾透明与可控
-3. **限流状态持久化** 对免费模型场景非常实用
-4. **OpenClaw 一键配置 + 备份恢复** 极大降低上手成本
-5. **单文件前端 + 轻后端** 部署和维护门槛很低，符合个人工具目标
+1. **初始化**：加载 Provider Key 状态 → 检测 OpenClaw → 加载自定义模型
+2. **配置 Key**：输入 Key → 保存 → 更新状态 → 显示模型选择区
+3. **选择模型**：筛选 Provider → 查看模型列表 → 直接选择模型 → 更新当前模型
+4. **手动添加**：选择 Provider → 输入模型 ID → 直接保存 → 添加到候选池
 
 ---
 
-## 10. 关键风险与技术债
+## 4. 测试体系
 
-1. **代码路径分叉**
-   - `ProviderRouter` / `CandidatePool` 已存在但主流程未接入，后续维护可能出现“双实现漂移”
+### 4.1 测试配置
 
-2. **自定义 provider 能力未闭环**
-   - 虽支持保存自定义 provider/model 到配置，但 `parseModelId` 和主请求路由只识别内置 provider
+- **框架**：Jest 30 + ts-jest
+- **运行方式**：`node --experimental-vm-modules node_modules/jest/bin/jest.js`
+- **模块系统**：ESM（通过 `ts-jest` 的 `useESM` 选项）
+- **测试环境**：Node.js
 
-3. **`/admin/models?refresh=true` 参数未实际生效**
-   - 前端有刷新按钮，但后端未用 query 强制刷新路径
+### 4.2 测试覆盖
 
-4. **OpenClaw 配置前置校验仍偏旧逻辑**
-   - `/api/configure-openclaw` 只检查 OpenRouter key 状态，不完全匹配“多 provider 任一可用即可”
+**已覆盖模块**：
+- Provider 注册与验证
+- 多 Provider Key 管理
+- 模型发现与过滤
+- 回退机制
+- 限流管理
+- API 路由
+- OpenClaw 配置
 
-5. **安全细节仍可增强**
-   - `.env` 权限未显式收紧
-   - `config.json` 存储自定义 provider 的明文 key（如使用该功能）
+**测试文件统计**：
+- 18 个测试文件
+- 涵盖所有核心模块
+- 支持模拟 `global.fetch` 进行 API 调用测试
+
+### 4.3 测试模式
+
+- **Red-Green 流程**：先写失败测试，再实现功能
+- **模块隔离**：每个测试文件独立测试一个模块
+- **环境清理**：`beforeEach`/`afterEach` 清理测试环境
+- **模拟外部依赖**：使用 `global.fetch` 模拟 HTTP 请求
 
 ---
 
-## 11. 建议的最小改进路径（按优先级）
+## 5. 关键设计决策
 
-### P0（先恢复可信回归）
+### 5.1 Gemini 特殊处理
 
-- 统一备份文件命名规范（实现与测试择一）
-- 删除或修复 `models.new.test.ts` 对 `getModels` 的无效依赖
-- 修复掩码规则断言与当前实现不一致问题
+**原因**：Google Gemini API 使用 `generateContent` 端点和 `x-goog-api-key` 认证，与 OpenAI 兼容 API 不同。
 
-### P1（提升主流程一致性）
+**影响范围**：
+- `src/server.ts`：`buildUpstreamRequest()`、`transformGeminiResponse()`
+- `src/config.ts`：`getProviderKey()` 支持文件读取 fallback
+- `src/models.ts`：`normalizeGeminiModelId()`、`buildGeminiFallbackModels()`
+- `src/provider-health.ts`：`buildProviderHeaders()`、`verifyModelAvailability()`
+- `src/providers/adapters/openai.ts`：`normalizeProviderModelId()`、`buildChatURL()`、`buildRequestBody()`
 
-- `/api/configure-openclaw` 改为“任一 provider key 已配置即可”
-- `/admin/models` 真正支持 `refresh=true` 强刷
-- 将免费模型过滤逻辑收敛到单一函数，避免多处复制
+### 5.2 Key 管理策略
 
-### P2（降低长期维护成本）
+**双存储机制**：
+1. **环境变量**：启动时从 `.env` 加载到 `process.env`
+2. **文件读取 fallback**：`getProviderKey()` 先查 `process.env`，再读 `.env` 文件
 
-- 明确是否正式启用 `ProviderRouter` / `CandidatePool`
-  - 要么接入主链
-  - 要么移除，减少认知负担
+**原因**：开发服务器热重载时，`process.env` 不会自动更新 `.env` 文件的变更。
+
+### 5.3 回退链策略
+
+**优先级排序**：
+1. 用户指定的首选模型
+2. 自定义模型（按 priority 排序）
+3. 同 Provider 已验证模型
+4. 全局评分最高的模型
+5. 其他已验证模型
+6. 未验证模型
+7. `openrouter/auto:free`（兜底）
+
+**原因**：确保在任何情况下都能找到可用模型，同时优先使用用户偏好的模型。
+
+### 5.4 模型评分系统
+
+**评分维度**：
+- **稳定性**：OpenRouter/GitHub 最稳定，Groq/Mistral 次之
+- **能力**：70B+ 模型能力强，8B/mini 轻量快速
+- **速度**：flash/lite 最快，70B/72B 较慢
+- **上下文**：32K+ 上下文最长
+- **领域**：编程、聊天、通用等不同领域
+- **白名单/黑名单**：基于实际使用经验的加分/减分
+
+**原因**：综合评估模型质量，自动推荐最优模型。
+
+---
+
+## 6. 已知问题与限制
+
+### 6.1 OpenCode 限流
+
+- **现象**：OpenCode 免费模型返回 429 `FreeUsageLimitError`
+- **原因**：上游限流，非项目代码问题
+- **解决方案**：等待限流重置或升级到付费版
+
+### 6.2 OpenRouter 余额不足
+
+- **现象**：返回 402 `Insufficient credits`
+- **原因**：账号余额不足
+- **解决方案**：充值或切换到其他 Provider
+
+### 6.3 模型可用性验证延迟
+
+- **现象**：后台仍会做可用性确认，但前端不再等待验证结果
+- **原因**：模型发现和回退链依然依赖后端的可用性判断
+- **解决方案**：前端直接切换，后端 fallback 兜底；验证作为后台能力保留
+
+### 6.4 ESM 模块兼容性
+
+- **现象**：Jest 测试需要特殊配置
+- **原因**：项目使用 ESM，Jest 默认支持 CommonJS
+- **解决方案**：使用 `--experimental-vm-modules` 和 `ts-jest` 的 `useESM` 选项
+
+---
+
+## 7. 项目结构总结
+
+```
+or_free_proxy/
+├── src/
+│   ├── server.ts           # HTTP 路由和请求处理
+│   ├── config.ts           # 配置管理和 Provider Key 管理
+│   ├── models.ts           # 模型发现、过滤和评分
+│   ├── fallback.ts         # 智能路由和回退机制
+│   ├── rate-limit.ts       # 限流状态管理
+│   ├── provider-health.ts  # Provider 健康检查
+│   ├── candidate-pool.ts   # 候选模型池管理
+│   ├── openclaw-config.ts  # OpenClaw 配置集成
+│   └── providers/
+│       ├── registry.ts     # Provider 注册中心
+│       ├── router.ts       # Provider 路由器
+│       ├── types.ts        # 类型定义
+│       └── adapters/
+│           └── openai.ts   # OpenAI/Gemini 适配器
+├── public/
+│   └── index.html          # Web 管理界面
+├── __tests__/              # 测试文件 (18 个)
+├── .env                    # 环境变量 (API Keys)
+├── config.json             # 应用配置
+├── package.json            # 项目依赖
+├── tsconfig.json           # TypeScript 配置
+├── jest.config.js          # Jest 测试配置
+└── plan.md                 # 开发计划
+```
+
+---
+
+## 8. 核心数据流
+
+### 8.1 聊天请求处理流程
+
+```
+客户端请求 → POST /v1/chat/completions
+  ↓
+解析模型 ID → provider/model 格式
+  ↓
+构建回退链 → 首选模型 → 自定义模型 → 评分排序模型 → 兜底模型
+  ↓
+遍历回逐 → 检查限流 → 构建请求 → 发送请求
+  ↓
+成功 → 返回响应 (Gemini 需转换格式)
+失败 → 标记不可用 → 尝试下一个
+  ↓
+全部失败 → 抛出详细错误信息
+```
+
+### 8.2 模型发现流程
+
+```
+GET /admin/models
+  ↓
+检查是否有任何 Provider 配置了 Key
+  ↓
+并行请求所有 Provider 的 /models 端点
+  ↓
+按 Provider 类型过滤模型
+  ↓
+标准化模型 ID 和名称
+  ↓
+去重合并模型列表
+  ↓
+启动后台验证
+  ↓
+返回模型列表（包含验证状态）
+```
+
+---
+
+## 9. 性能优化
+
+### 9.1 缓存策略
+
+- **模型缓存**：每个 Provider 独立缓存，TTL 5 分钟
+- **配置缓存**：`cachedConfig` 避免重复文件读取
+- **限流状态缓存**：`memoryState` 避免重复文件读取
+
+### 9.2 并行处理
+
+- **模型发现**：`Promise.all()` 并行请求所有 Provider
+- **健康检查**：`Promise.all()` 并行验证所有 Provider
+- **后台验证**：异步验证，不阻塞主流程
+
+### 9.3 连接复用
+
+- **HTTP 代理**：自动检测并配置 HTTP 代理，使用 undici 的 ProxyAgent
+- **超时控制**：所有外部请求都有超时限制（默认 10 秒，模型验证 12 秒）
+
+---
+
+## 10. 安全考虑
+
+### 10.1 API Key 保护
+
+- **文件权限**：`.env` 文件自动设置为 0o600 (仅所有者可读写)
+- **掩码显示**：前端显示时自动掩码，只显示前缀和后缀
+- **环境变量**：通过 `.env` 文件管理，不提交到 Git
+
+### 10.2 输入验证
+
+- **API Key 格式**：验证 Key 格式（如 `sk-` 前缀）
+- **模型 ID 验证**：验证模型 ID 格式
+- **请求体验证**：验证请求体格式
+
+### 10.3 错误处理
+
+- **详细错误信息**：提供清晰的错误提示和解决建议
+- **错误分类**：区分认证错误、网络错误、模型不可用等
+- **敏感信息过滤**：不暴露 API Key 等敏感信息
+
+---
+
+## 11. 扩展性分析
+
+### 11.1 添加新 Provider
+
+**步骤**：
+1. 在 `src/providers/registry.ts` 添加 Provider 配置
+2. 在 `src/config.ts` 添加 Key 映射
+3. 在 `src/models.ts` 添加模型过滤逻辑（如需要）
+4. 在 `src/server.ts` 添加特殊处理（如需要）
+5. 在 `src/provider-health.ts` 添加验证逻辑（如需要）
+6. 在 `public/index.html` 添加 UI 组件
+
+**示例**：Gemini 的添加涉及上述所有步骤，因为其 API 格式与 OpenAI 不同。
+
+### 11.2 添加新功能
+
+**扩展点**：
+- **新路由**：在 `src/server.ts` 添加新路由
+- **新配置**：在 `src/config.ts` 添加新配置项
+- **新模型过滤**：在 `src/models.ts` 添加新过滤逻辑
+- **新回退策略**：在 `src/fallback.ts` 添加新回退策略
 
 ---
 
 ## 12. 总结
 
-这个项目的本质不是“模型平台”，而是一个针对免费模型不稳定场景的**本地可用性增强层**。其核心竞争力在于：
+Free Proxy 是一个设计良好的多 Provider AI 模型代理服务，具有以下特点：
 
-- OpenAI 兼容入口固定
-- 多 provider 聚合
-- 自动 fallback + 限流记忆
-- 客户端（尤其 OpenClaw）低成本接入
+1. **多 Provider 支持**：支持 8 个 Provider，统一管理
+2. **智能路由**：基于评分和回退机制，自动选择最优模型
+3. **Gemini 特殊处理**：完整的 Gemini API 适配，包括格式转换
+4. **健康检查**：实时验证模型可用性
+5. **限流管理**：自动处理 429/503 错误，智能回退
+6. **OpenClaw 集成**：一键配置 OpenClaw，自动备份恢复
+7. **Web 管理界面**：直观的 UI，支持模型选择和配置
+8. **完善测试**：18 个测试文件，覆盖核心功能
 
-从工程角度看，主体架构已经可用，且设计方向正确；当前主要问题不在核心思路，而在“演进过程中接口与测试未同步”带来的一致性风险。只要先修复 P0/P1 项，整体会从“可用工具”快速进入“稳定可维护工具”状态。
+**技术亮点**：
+- 使用 Hono 框架，轻量高效
+- ESM 模块系统，现代化
+- TypeScript 类型安全
+- 完善的错误处理和日志
+- 良好的扩展性和可维护性
+
+**潜在改进**：
+- 模型评分可配置化
+- 支持更多 Gemini 模型
+- 添加请求日志和监控
+- 支持模型优先级动态调整
