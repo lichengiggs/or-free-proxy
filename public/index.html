@@ -141,6 +141,106 @@
         获取 Key：<a href="https://opencode.ai/auth" target="_blank" class="link">opencode.ai/auth</a>
       </div>
     </div>
+
+    <!-- Gemini -->
+    <div class="provider-section" id="gemini-provider">
+      <div class="provider-header">
+        <span class="provider-name">Gemini</span>
+        <span class="provider-badge badge-free">免费</span>
+        <span class="provider-status" id="gemini-status">未配置</span>
+      </div>
+      <div class="provider-key-form" id="gemini-form">
+        <input type="password" id="gemini-key" class="input" placeholder="AIza..." autocomplete="off">
+        <button class="btn btn-primary" onclick="saveProviderKey('gemini')">保存</button>
+      </div>
+      <div class="provider-key-form" id="gemini-form-configured" style="display: none;">
+        <span id="gemini-masked" style="flex: 1; color: #10b981;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('gemini')">修改</button>
+      </div>
+      <div class="provider-link">
+        获取 Key：<a href="https://aistudio.google.com/app/apikey" target="_blank" class="link">aistudio.google.com/app/apikey</a>
+      </div>
+    </div>
+
+    <!-- GitHub Models -->
+    <div class="provider-section" id="github-provider">
+      <div class="provider-header">
+        <span class="provider-name">GitHub Models</span>
+        <span class="provider-badge badge-free">免费</span>
+        <span class="provider-status" id="github-status">未配置</span>
+      </div>
+      <div class="provider-key-form" id="github-form">
+        <input type="password" id="github-key" class="input" placeholder="ghp_..." autocomplete="off">
+        <button class="btn btn-primary" onclick="saveProviderKey('github')">保存</button>
+      </div>
+      <div class="provider-key-form" id="github-form-configured" style="display: none;">
+        <span id="github-masked" style="flex: 1; color: #10b981;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('github')">修改</button>
+      </div>
+      <div class="provider-link">
+        获取 Key：<a href="https://github.com/settings/tokens" target="_blank" class="link">github.com/settings/tokens</a>
+      </div>
+    </div>
+
+    <!-- Mistral -->
+    <div class="provider-section" id="mistral-provider">
+      <div class="provider-header">
+        <span class="provider-name">Mistral</span>
+        <span class="provider-badge badge-free">免费</span>
+        <span class="provider-status" id="mistral-status">未配置</span>
+      </div>
+      <div class="provider-key-form" id="mistral-form">
+        <input type="password" id="mistral-key" class="input" placeholder="mist-..." autocomplete="off">
+        <button class="btn btn-primary" onclick="saveProviderKey('mistral')">保存</button>
+      </div>
+      <div class="provider-key-form" id="mistral-form-configured" style="display: none;">
+        <span id="mistral-masked" style="flex: 1; color: #10b981;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('mistral')">修改</button>
+      </div>
+      <div class="provider-link">
+        获取 Key：<a href="https://console.mistral.ai/api-keys" target="_blank" class="link">console.mistral.ai/api-keys</a>
+      </div>
+    </div>
+
+    <!-- Cerebras -->
+    <div class="provider-section" id="cerebras-provider">
+      <div class="provider-header">
+        <span class="provider-name">Cerebras</span>
+        <span class="provider-badge badge-free">免费</span>
+        <span class="provider-status" id="cerebras-status">未配置</span>
+      </div>
+      <div class="provider-key-form" id="cerebras-form">
+        <input type="password" id="cerebras-key" class="input" placeholder="csk_..." autocomplete="off">
+        <button class="btn btn-primary" onclick="saveProviderKey('cerebras')">保存</button>
+      </div>
+      <div class="provider-key-form" id="cerebras-form-configured" style="display: none;">
+        <span id="cerebras-masked" style="flex: 1; color: #10b981;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('cerebras')">修改</button>
+      </div>
+      <div class="provider-link">
+        获取 Key：<a href="https://cloud.cerebras.ai/" target="_blank" class="link">cloud.cerebras.ai</a>
+      </div>
+    </div>
+
+    <!-- SambaNova -->
+    <div class="provider-section" id="sambanova-provider">
+      <div class="provider-header">
+        <span class="provider-name">SambaNova</span>
+        <span class="provider-badge badge-free">免费</span>
+        <span class="provider-status" id="sambanova-status">未配置</span>
+      </div>
+      <div class="provider-key-form" id="sambanova-form">
+        <input type="password" id="sambanova-key" class="input" placeholder="sn-..." autocomplete="off">
+        <button class="btn btn-primary" onclick="saveProviderKey('sambanova')">保存</button>
+      </div>
+      <div class="provider-key-form" id="sambanova-form-configured" style="display: none;">
+        <span id="sambanova-masked" style="flex: 1; color: #10b981;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('sambanova')">修改</button>
+      </div>
+      <div class="provider-link">
+        获取 Key：<a href="https://cloud.sambanova.ai/iggs/free-proxy" target="_blank" class="link">cloud.sambanova.ai/iggs/free-proxy</a>
+      </div>
+    </div>
   </div>
 
   <!-- Step 2: Model Selection -->
@@ -151,8 +251,13 @@
       <button class="tab-btn active" onclick="switchModelTab('all')">全部</button>
       <button class="tab-btn" onclick="switchModelTab('openrouter')">OpenRouter</button>
       <button class="tab-btn" onclick="switchModelTab('groq')">Groq</button>
-      <button class="tab-btn" onclick="switchModelTab('opencode')">OpenCode</button>
-    </div>
+        <button class="tab-btn" onclick="switchModelTab('opencode')">OpenCode</button>
+        <button class="tab-btn" onclick="switchModelTab('gemini')">Gemini</button>
+        <button class="tab-btn" onclick="switchModelTab('github')">GitHub Models</button>
+        <button class="tab-btn" onclick="switchModelTab('mistral')">Mistral</button>
+        <button class="tab-btn" onclick="switchModelTab('cerebras')">Cerebras</button>
+        <button class="tab-btn" onclick="switchModelTab('sambanova')">SambaNova</button>
+      </div>
     
     <div id="modelsContainer">
       <button class="btn btn-secondary" id="refreshModelsBtn" onclick="refreshModels()" style="margin-bottom: 1rem;">刷新模型列表</button>
@@ -168,6 +273,11 @@
           <option value="openrouter">OpenRouter</option>
           <option value="groq">Groq</option>
           <option value="opencode">OpenCode</option>
+          <option value="gemini">Gemini</option>
+          <option value="github">GitHub Models</option>
+          <option value="mistral">Mistral</option>
+          <option value="cerebras">Cerebras</option>
+          <option value="sambanova">SambaNova</option>
         </select>
         <input id="customModelId" class="input" placeholder="例如 meta-llama/llama-3.3-70b-instruct" autocomplete="off" style="margin-bottom: 0;">
         <button class="btn btn-primary" onclick="verifyAndSaveCustomModel()">验证并添加</button>
@@ -227,7 +337,7 @@
         const res = await fetch('/api/provider-keys');
         const data = await res.json();
         
-        ['openrouter', 'groq', 'opencode'].forEach(provider => {
+        ['openrouter', 'groq', 'opencode', 'gemini', 'github', 'mistral', 'cerebras', 'sambanova'].forEach(provider => {
           const status = data[provider];
           const statusEl = document.getElementById(`${provider}-status`);
           const formEl = document.getElementById(`${provider}-form`);
@@ -248,7 +358,7 @@
           }
         });
         
-        const anyConfigured = ['openrouter', 'groq', 'opencode'].some(p => data[p] && data[p].configured);
+        const anyConfigured = ['openrouter', 'groq', 'opencode', 'gemini', 'github', 'mistral', 'cerebras', 'sambanova'].some(p => data[p] && data[p].configured);
         if (anyConfigured) {
           document.getElementById('modelsSection').style.display = 'block';
           startModelSearch();

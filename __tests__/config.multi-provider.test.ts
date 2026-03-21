@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { unlinkSync } from 'fs';
+import { unlinkSync, writeFileSync } from 'fs';
 import { getProviderKey, saveProviderKey, getAllProviderKeysStatus } from '../src/config';
 
 describe('Multi-Provider Key Management', () => {
@@ -48,6 +48,14 @@ describe('Multi-Provider Key Management', () => {
     test('should return undefined for unknown provider', () => {
       const key = getProviderKey('unknown');
       expect(key).toBeUndefined();
+    });
+
+    test('should read provider key from .env when process env is empty', () => {
+      writeFileSync('.env', 'GEMINI_API_KEY=AIza-file-key\n');
+      delete process.env.GEMINI_API_KEY;
+
+      const key = getProviderKey('gemini');
+      expect(key).toBe('AIza-file-key');
     });
   });
 

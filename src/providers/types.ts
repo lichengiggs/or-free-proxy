@@ -2,7 +2,7 @@ export interface Provider {
   name: string;
   baseURL: string;
   apiKeyEnv: string;
-  format: 'openai';
+  format: 'openai' | 'gemini';
   isFree: boolean;
 }
 

@@ -18,12 +18,19 @@ describe('provider-health new helpers', () => {
     expect(headers['X-Title']).toBeUndefined();
   });
 
+  test('buildProviderHeaders should use x-goog-api-key for gemini', () => {
+    const headers = buildProviderHeaders('gemini', 'AIza-test');
+    expect(headers.Authorization).toBeUndefined();
+    expect(headers['x-goog-api-key']).toBe('AIza-test');
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
   test('normalizeVerificationModelId should add models/ for gemini', () => {
-    expect(normalizeVerificationModelId('gemini', 'gemini-2.5-flash')).toBe('models/gemini-2.5-flash');
+    expect(normalizeVerificationModelId('gemini', 'gemini-3.1-flash-lite-preview')).toBe('models/gemini-3.1-flash-lite-preview');
   });
 
   test('normalizeVerificationModelId should keep existing models/ prefix', () => {
-    expect(normalizeVerificationModelId('gemini', 'models/gemini-2.5-flash')).toBe('models/gemini-2.5-flash');
+    expect(normalizeVerificationModelId('gemini', 'models/gemini-3.1-flash-lite-preview')).toBe('models/gemini-3.1-flash-lite-preview');
   });
 
   test('normalizeVerificationModelId should keep other providers unchanged', () => {

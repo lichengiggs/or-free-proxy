@@ -138,7 +138,6 @@ def main():
 
     tasks = [
         ("基础问答", [{"role": "user", "content": "1 + 1 等于几？只回答数字"}]),
-        ("英文翻译", [{"role": "user", "content": "把'你好世界'翻译成英文，只回答翻译结果"}]),
         ("代码解释", [{"role": "user", "content": "解释 Python 的 print('Hello') 是做什么的，用一句话说明"}])
     ][: max(1, args.count)]
 

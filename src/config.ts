@@ -1,5 +1,5 @@
 import { readFile, writeFile, chmod } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import dotenv from 'dotenv';
 import { fetch as undiciFetch, ProxyAgent } from 'undici';
 
@@ -76,6 +76,11 @@ export const ENV = {
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
   GROQ_API_KEY: process.env.GROQ_API_KEY || '',
   OPENCODE_API_KEY: process.env.OPENCODE_API_KEY || '',
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+  GITHUB_MODELS_API_KEY: process.env.GITHUB_MODELS_API_KEY || '',
+  MISTRAL_API_KEY: process.env.MISTRAL_API_KEY || '',
+  CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY || '',
+  SAMBANOVA_API_KEY: process.env.SAMBANOVA_API_KEY || '',
   PORT: Number(process.env.PORT) || 8765
 };
 
@@ -99,13 +104,36 @@ async function hardenEnvFilePermissions(): Promise<void> {
 const PROVIDER_ENV_MAP: Record<string, string> = {
   openrouter: 'OPENROUTER_API_KEY',
   groq: 'GROQ_API_KEY',
-  opencode: 'OPENCODE_API_KEY'
+  opencode: 'OPENCODE_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  github: 'GITHUB_MODELS_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  sambanova: 'SAMBANOVA_API_KEY'
 };
 
 export function getProviderKey(provider: string): string | undefined {
   const envKey = PROVIDER_ENV_MAP[provider];
   if (!envKey) return undefined;
-  return process.env[envKey];
+
+  const runtimeValue = process.env[envKey]?.trim();
+  if (runtimeValue) return runtimeValue;
+
+  if (!existsSync(ENV_PATH)) return undefined;
+
+  try {
+    const content = readFileSync(ENV_PATH, 'utf-8');
+    const match = content.match(new RegExp(`^${envKey}=(.+)$`, 'm'));
+    const fileValue = match?.[1]?.trim();
+    if (fileValue) {
+      process.env[envKey] = fileValue;
+      return fileValue;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
 }
 
 export interface MultiProviderKeyStatus {
@@ -135,7 +163,7 @@ async function getProviderStatus(provider: string): Promise<{ configured: boolea
 }
 
 export async function getAllProviderKeysStatus(): Promise<MultiProviderKeyStatus> {
-  const providers = ['openrouter', 'groq', 'opencode'];
+  const providers = ['openrouter', 'groq', 'opencode', 'gemini', 'github', 'mistral', 'cerebras', 'sambanova'];
   const status: MultiProviderKeyStatus = {};
 
   for (const provider of providers) {

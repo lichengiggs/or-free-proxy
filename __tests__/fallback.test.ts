@@ -130,7 +130,28 @@ describe('fallback module', () => {
         expect(true).toBe(false);
       } catch (error: any) {
         expect(error.message).toContain('无可用模型');
+        expect(error.message).toContain('已尝试:');
       }
+    });
+
+    test('should expose explicit credits error reason', async () => {
+      const mockExecute = async () => ({
+        success: false,
+        error: { status: 402, message: 'Insufficient credits' }
+      });
+
+      await expect(executeWithFallback('openrouter/auto:free', mockExecute))
+        .rejects.toThrow('余额不足');
+    });
+
+    test('should expose explicit free daily limit reason', async () => {
+      const mockExecute = async () => ({
+        success: false,
+        error: { status: 429, message: 'free-models-per-day' }
+      });
+
+      await expect(executeWithFallback('openrouter/auto:free', mockExecute))
+        .rejects.toThrow('免费模型日额度已用完');
     });
 
     test('should throw error when all models fail', async () => {

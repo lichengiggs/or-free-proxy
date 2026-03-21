@@ -24,6 +24,10 @@ export function clearModelDiscoveryCache(): void {
   providerModelCache.clear();
 }
 
+export const __MODEL_TEST_ONLY__ = {
+  clearProviderModelCache: clearModelDiscoveryCache
+};
+
 export async function fetchModels(forceRefresh = false): Promise<OpenRouterModel[]> {
   const now = Date.now();
   if (!forceRefresh && cachedModels.length && now - lastFetchTime < CACHE_TTL) {
@@ -89,6 +93,8 @@ export async function fetchAllModels(): Promise<Model[]> {
 type RawProviderModel = {
   id: string;
   name?: string;
+  slug?: string;
+  model?: string;
   context_length?: number;
   pricing?: { prompt?: string | number; completion?: string | number };
   task?: string;
@@ -106,7 +112,20 @@ type RawProviderModel = {
   };
 };
 
-const GEMINI_FREE_MODEL_ID = 'gemini-2.5-flash';
+const GEMINI_FALLBACK_MODELS = [
+  {
+    id: 'gemini/gemini-3.1-flash-lite-preview',
+    name: 'Gemini 3.1 Flash Lite Preview',
+    provider: 'gemini',
+    pricing: { prompt: '0', completion: '0' }
+  },
+  {
+    id: 'gemini/gemma-3-27b-it',
+    name: 'Gemma 3 27B',
+    provider: 'gemini',
+    pricing: { prompt: '0', completion: '0' }
+  }
+] as const;
 
 function normalizeGeminiModelId(id: string): string {
   return id.replace(/^models\//, '');
@@ -123,6 +142,10 @@ function normalizeOpenCodeModelId(id: string): string {
   return id.replace(/^models\//, '');
 }
 
+function getRawModelId(model: Partial<RawProviderModel>): string {
+  return String(model.id || model.name || model.model || model.slug || '');
+}
+
 export function normalizeProviderModelId(providerName: string, modelId: string): string {
   if (providerName === 'gemini') return normalizeGeminiModelId(modelId);
   if (providerName === 'github') return normalizeGithubModelId(modelId);
@@ -131,7 +154,7 @@ export function normalizeProviderModelId(providerName: string, modelId: string):
 }
 
 export function resolveProviderModelName(providerName: string, model: RawProviderModel): string {
-  const normalizedId = normalizeProviderModelId(providerName, model.id);
+  const normalizedId = normalizeProviderModelId(providerName, getRawModelId(model));
   return model.name || model.friendly_name || normalizedId;
 }
 
@@ -164,6 +187,10 @@ function buildGithubFallbackModels(): Model[] {
   ];
 }
 
+function buildGeminiFallbackModels(): Model[] {
+  return GEMINI_FALLBACK_MODELS.map(model => ({ ...model }));
+}
+
 export function isChatModel(model: RawProviderModel): boolean {
   const taskSignals = `${model.task || ''} ${model.object || ''} ${model.type || ''}`.toLowerCase();
   if (taskSignals.includes('chat') || taskSignals.includes('completion')) {
@@ -189,30 +216,36 @@ export async function fetchProviderModels(provider: Provider, key: string): Prom
 
   try {
     const response = await fetchWithTimeout(`${provider.baseURL}/models`, {
-      headers: { Authorization: `Bearer ${key}` }
+      headers: provider.name === 'gemini'
+        ? { 'x-goog-api-key': key }
+        : { Authorization: `Bearer ${key}` }
     });
 
     if (!response.ok) {
+      if (provider.name === 'gemini') return buildGeminiFallbackModels();
       if (provider.name === 'github') return buildGithubFallbackModels();
       if (provider.name === 'opencode') return buildOpenCodeFallbackModels();
       providerModelCache.set(provider.name, { models: [], fetchedAt: now });
       return [];
     }
 
-    const payload = await response.json() as { data?: RawProviderModel[] } | RawProviderModel[];
+    const payload = await response.json() as { data?: RawProviderModel[]; models?: RawProviderModel[]; items?: RawProviderModel[] } | RawProviderModel[];
     const rawModels = Array.isArray(payload)
       ? payload
-      : (payload.data || []);
+      : (payload.data || payload.models || payload.items || []);
 
     const models = rawModels
       .filter(model => {
+        const rawId = getRawModelId(model);
         if (provider.name === 'gemini') {
-          return normalizeGeminiModelId(model.id) === GEMINI_FREE_MODEL_ID;
+          const normalized = normalizeGeminiModelId(rawId);
+          return normalized === 'gemini-3.1-flash-lite-preview' || normalized === 'gemma-3-27b-it';
         }
         if (provider.name === 'github') {
           const family = String(model.model_family || '').toLowerCase();
-          const name = String(model.friendly_name || model.name || model.id).toLowerCase();
+          const name = String(model.friendly_name || model.name || rawId).toLowerCase();
           const task = String(model.task || '').toLowerCase();
+          const normalizedId = normalizeGithubModelId(rawId).toLowerCase();
           return task.includes('chat')
             || family.includes('gpt')
             || family.includes('llama')
@@ -221,7 +254,12 @@ export async function fetchProviderModels(provider: Provider, key: string): Prom
             || name.includes('llama')
             || name.includes('mistral')
             || name.includes('phi')
-            || name.includes('mini');
+            || name.includes('mini')
+            || normalizedId.includes('gpt')
+            || normalizedId.includes('llama')
+            || normalizedId.includes('mistral')
+            || normalizedId.includes('phi')
+            || normalizedId.includes('mini');
         }
         if (provider.name === 'opencode') {
           return isOpenCodeFreeModel(model);
@@ -229,8 +267,11 @@ export async function fetchProviderModels(provider: Provider, key: string): Prom
         return isChatModel(model);
       })
       .map((model): Model => ({
-        id: `${provider.name}/${normalizeProviderModelId(provider.name, model.id)}`,
-        name: resolveProviderModelName(provider.name, model),
+        id: `${provider.name}/${normalizeProviderModelId(provider.name, getRawModelId(model))}`,
+        name: resolveProviderModelName(provider.name, {
+          ...model,
+          id: getRawModelId(model)
+        } as RawProviderModel),
         provider: provider.name,
         context_length: model.context_length,
         pricing: {
@@ -239,10 +280,15 @@ export async function fetchProviderModels(provider: Provider, key: string): Prom
         }
       }));
 
+    if (provider.name === 'github' && models.length === 0) {
+      return buildGithubFallbackModels();
+    }
+
     providerModelCache.set(provider.name, { models, fetchedAt: now });
     return models;
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Failed to fetch models from ${provider.name}:`, err);
+    if (provider.name === 'gemini') return buildGeminiFallbackModels();
     if (provider.name === 'github') return buildGithubFallbackModels();
     if (provider.name === 'opencode') return buildOpenCodeFallbackModels();
     return [];
@@ -255,13 +301,10 @@ export function normalizeProviderModels(models: Model[]): Model[] {
 
   for (const model of models) {
     if (model.provider === 'gemini') {
-      if (seen.has('gemini')) continue;
-      seen.add('gemini');
-      result.push({
-        ...model,
-        id: 'gemini/gemini-2.5-flash',
-        name: 'Gemini 2.5 Flash'
-      });
+      if (!seen.has(model.id)) {
+        seen.add(model.id);
+        result.push(model);
+      }
       continue;
     }
 

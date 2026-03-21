@@ -4,7 +4,7 @@ import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { stream } from 'hono/streaming';
 import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus, getProviderKey, saveProviderKey, getAllProviderKeysStatus, saveCustomProvider, saveCustomModel, getCustomModels, deleteCustomModel } from './config';
-import { fetchModels, filterFreeModels, rankModels, fetchAllModels, normalizeProviderModels } from './models';
+import { fetchModels, filterFreeModels, rankModels, fetchAllModels, normalizeProviderModels, clearModelDiscoveryCache } from './models';
 import { executeWithFallback } from './fallback';
 import { detectOpenClawConfig, mergeConfig, listBackups, restoreBackup } from './openclaw-config';
 import { PROVIDERS, isKnownProvider } from './providers/registry';
@@ -57,6 +57,34 @@ function getProviderConfig(provider: string) {
   return PROVIDER_CONFIGS[provider];
 }
 
+function buildUpstreamRequest(provider: string, baseURL: string, model: string, body: any): { url: string; payload: unknown } {
+  if (provider === 'gemini') {
+    return {
+      url: `${baseURL}/${normalizeVerificationModelId(provider, model)}:generateContent`,
+      payload: {
+        contents: Array.isArray(body.messages)
+          ? body.messages.map((message: { role?: string; content?: unknown }) => ({
+            role: message.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '') }]
+          }))
+          : [{ parts: [{ text: 'ping' }] }],
+        generationConfig: {
+          maxOutputTokens: Number.isFinite(body.max_tokens) ? body.max_tokens : 16,
+          temperature: typeof body.temperature === 'number' ? body.temperature : undefined
+        }
+      }
+    };
+  }
+
+  return {
+    url: `${baseURL}/chat/completions`,
+    payload: {
+      ...body,
+      model: normalizeVerificationModelId(provider, model)
+    }
+  };
+}
+
 function sanitizeOutgoingHeaders(provider: string, headers: Record<string, string>): Record<string, string> {
   const sanitized: Record<string, string> = {};
 
@@ -79,6 +107,40 @@ function verifyReasonToMessage(reason?: VerifyReason): string | undefined {
   if (reason === 'auth_failed') return 'API key 无效或权限不足';
   if (reason === 'network_error') return '网络连接失败，请检查网络或代理设置';
   return '模型不可用或当前 provider 暂不可用';
+}
+
+function mapGeminiFinishReason(reason?: string): string {
+  if (reason === 'MAX_TOKENS') return 'length';
+  if (reason === 'SAFETY') return 'content_filter';
+  return 'stop';
+}
+
+function transformGeminiResponse(data: any, modelId: string) {
+  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+
+  return {
+    id: data?.responseId || `gemini-${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: data?.modelVersion || modelId,
+    choices: candidates.map((candidate: any, index: number) => ({
+      index,
+      finish_reason: mapGeminiFinishReason(candidate?.finishReason),
+      message: {
+        role: 'assistant',
+        content: Array.isArray(candidate?.content?.parts)
+          ? candidate.content.parts
+              .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+              .join('')
+          : ''
+      }
+    })),
+    usage: {
+      prompt_tokens: Number(data?.usageMetadata?.promptTokenCount || 0),
+      completion_tokens: Number(data?.usageMetadata?.candidatesTokenCount || 0),
+      total_tokens: Number(data?.usageMetadata?.totalTokenCount || 0)
+    }
+  };
 }
 
 const verificationStatus = new Map<string, { verified: boolean; reason?: VerifyReason; lastCheckedAt: number; pending?: boolean }>();
@@ -156,20 +218,20 @@ app.post('/v1/chat/completions', async (c) => {
           return { success: false, error: { message: `API key not configured for ${provider}` } };
         }
 
-        body.model = normalizeVerificationModelId(provider, model);
-
         const proxyHeaders: Record<string, string> = {
           ...buildProviderHeaders(provider, apiKey),
           ...sanitizeOutgoingHeaders(provider, headers)
         };
 
+        const upstream = buildUpstreamRequest(provider, dynamicProviderConfig.baseURL, model, body);
+
         try {
           const response = await fetchWithTimeout(
-            `${dynamicProviderConfig.baseURL}/chat/completions`,
+            upstream.url,
             {
               method: 'POST',
               headers: proxyHeaders,
-              body: JSON.stringify(body)
+              body: JSON.stringify(upstream.payload)
             },
             60000
           );
@@ -224,17 +286,34 @@ app.post('/v1/chat/completions', async (c) => {
     }
 
     const data = await response.json();
-    return c.json(data, { status: response.status as any });
+    const actualProvider = parseModelId(fallbackInfo.model).provider;
+    const normalized = actualProvider === 'gemini'
+      ? transformGeminiResponse(data, fallbackInfo.model)
+      : data;
+    return c.json(normalized, { status: response.status as any });
 
   } catch (err: any) {
     console.error(`[${new Date().toISOString()}] Request error:`, err.message);
+    const message = String(err?.message || 'internal error');
+    const isCreditsIssue = /insufficient credits|402/i.test(message);
+    const isFreeDailyLimit = /free-models-per-day|429/i.test(message);
+
+    const hint = isCreditsIssue
+      ? 'OpenRouter 账号 credits 不足，请充值或切换其他 provider。'
+      : isFreeDailyLimit
+        ? 'OpenRouter 免费模型日额度已用完，请等待重置或充值。'
+        : '请检查 provider key、网络连接或切换模型重试。';
+
+    const status = isCreditsIssue ? 402 : isFreeDailyLimit ? 429 : 500;
+
     return c.json({
       error: {
-        message: err.message,
+        message,
+        hint,
         type: 'internal_error',
-        code: 500
+        code: status
       }
-    }, 500);
+    }, status as 402 | 429 | 500);
   }
 });
 
@@ -257,6 +336,9 @@ app.get('/admin/models', async (c) => {
     }
     
     const shouldRefresh = c.req.query('refresh') === 'true';
+    if (shouldRefresh) {
+      clearModelDiscoveryCache();
+    }
 
     // 直接从所有 provider 获取模型列表
     const allModels = await fetchAllModels();
@@ -324,7 +406,7 @@ app.get('/admin/models', async (c) => {
     return c.json({
       models: displayModels.map(model => ({
         id: model.id,
-        name: model.provider === 'gemini' ? 'Gemini 2.5 Flash' : model.name,
+        name: model.name,
         provider: model.provider,
         context_length: model.context_length || 0,
         is_recommended: false,

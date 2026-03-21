@@ -12,6 +12,44 @@ export interface FallbackResult {
   fallback_reason?: string;
 }
 
+type ExecuteError = {
+  status?: number;
+  retry_after?: number;
+  message?: string;
+};
+
+function summarizeFailure(error?: ExecuteError): string {
+  if (!error) return '未知错误';
+
+  const message = String(error.message || '');
+
+  if (error.status === 402 || /insufficient credits/i.test(message)) {
+    return 'OpenRouter 余额不足（402），请检查账号 credits';
+  }
+
+  if (error.status === 429 && /free-models-per-day/i.test(message)) {
+    return 'OpenRouter 免费模型日额度已用完（429），请等待重置或充值';
+  }
+
+  if (error.status === 429 && /freeusagelimiterror|rate limit exceeded/i.test(message)) {
+    return 'OpenCode 免费额度已触发限流（429），请稍后再试';
+  }
+
+  if (error.status === 429) {
+    return `触发限流（429），建议稍后重试`;
+  }
+
+  if (error.status === 401 || error.status === 403) {
+    return 'API key 无效或权限不足';
+  }
+
+  if (error.status) {
+    return `上游返回错误（${error.status}）${message ? `: ${message.slice(0, 120)}` : ''}`;
+  }
+
+  return message ? message.slice(0, 160) : '网络或上游异常';
+}
+
 // 模型可用性状态（内存中，重启重置）
 // 1 = 可用，0 = 最近失败过
 const modelAvailability = new Map<string, number>();
@@ -73,7 +111,7 @@ function scoreStability(model: Model): number {
 }
 
 function scoreModel(model: Model): number {
-  const verified = getLatestVerification(model.id)?.verified ?? false;
+  const verified = getLatestVerification(model.id)?.verified ?? true;
   const gate = verified && isModelAvailable(model.id) ? 1 : 0;
   const lower = model.id.toLowerCase();
   const whitelistBonus = WHITELIST.some(name => lower.includes(name)) ? 20 : 0;
@@ -171,10 +209,11 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
 
 export async function executeWithFallback<T>(
   preferredModel: string | undefined,
-  execute: (model: string) => Promise<{ success: boolean; response?: T; error?: { status?: number; retry_after?: number; message?: string } }>
+  execute: (model: string) => Promise<{ success: boolean; response?: T; error?: ExecuteError }>
 ): Promise<{ result: T; fallbackInfo: FallbackResult }> {
   const chain = await getFallbackChain(preferredModel);
   const attemptedModels: string[] = [];
+  const attemptedErrors: Array<{ model: string; error?: ExecuteError }> = [];
   let isFirstAttempt = true;
 
   for (const model of chain) {
@@ -213,6 +252,7 @@ export async function executeWithFallback<T>(
     // 模型失败，标记为不可用
     markModelUnavailable(model);
     attemptedModels.push(model);
+    attemptedErrors.push({ model, error });
 
     if (isFirstAttempt && chain.length > 1) {
       console.log(`[Fallback] ${model} failed, trying alternatives...`);
@@ -227,5 +267,8 @@ export async function executeWithFallback<T>(
     }
   }
 
-  throw new Error('无可用模型，请稍后再试');
+  const last = attemptedErrors[attemptedErrors.length - 1];
+  const reason = summarizeFailure(last?.error);
+  const attemptedHint = attemptedModels.length ? `；已尝试: ${attemptedModels.join(' -> ')}` : '';
+  throw new Error(`无可用模型，请稍后再试。原因：${reason}${attemptedHint}`);
 }

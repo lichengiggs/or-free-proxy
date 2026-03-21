@@ -3,7 +3,7 @@ import { normalizeProviderModelId, resolveProviderModelName } from '../src/model
 
 describe('provider model normalization helpers', () => {
   test('normalizeProviderModelId should normalize gemini prefix', () => {
-    expect(normalizeProviderModelId('gemini', 'models/gemini-2.5-flash')).toBe('gemini-2.5-flash');
+    expect(normalizeProviderModelId('gemini', 'models/gemini-3.1-flash-lite-preview')).toBe('gemini-3.1-flash-lite-preview');
   });
 
   test('normalizeProviderModelId should normalize github model path', () => {
@@ -32,8 +32,8 @@ describe('provider model normalization helpers', () => {
     expect(withFriendly).toBe('Friendly Name');
 
     const withoutName = resolveProviderModelName('gemini', {
-      id: 'models/gemini-2.5-flash'
+      id: 'models/gemini-3.1-flash-lite-preview'
     } as any);
-    expect(withoutName).toBe('gemini-2.5-flash');
+    expect(withoutName).toBe('gemini-3.1-flash-lite-preview');
   });
 });

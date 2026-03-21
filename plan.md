@@ -1,375 +1,265 @@
-# free_proxy 重构计划（可维护性 + 小白体验）
+# 多 Provider 接入计划
 
-## 1. 目标与验收标准
+目标：新增并跑通 `Gemini` / `GitHub Models` / `Mistral` / `Cerebras` / `SambaNova`。
 
-本次重构只做两件事：
-
-1. **让代码好维护**：结构清晰、职责单一、测试可作为回归门禁。
-2. **让小白用户更好用**：安装后按向导操作，遇到问题能看懂、能自救。
-
-### 量化验收（建议）
-
-- `npm test` 全绿，关键路径覆盖率 >= 80%
-- 新用户首次配置成功率 >= 90%（按本地引导流程）
-- 常见错误（无 key、限流、网络失败）都有可读提示与下一步建议
-- 配置相关逻辑（`.env`、`config.json`、OpenClaw）全部通过统一服务层
+核心原则：
+- 先各自独立接入，先跑通。
+- 不提前抽统一适配层。
+- 先保留 provider 特殊逻辑，等都稳定后再考虑合并。
+- 某些 provider 如果天然不同，就允许一直独立。
 
 ---
 
-## 2. 当前痛点（基于 research）
+## 1. 现状
 
-### 2.1 维护性痛点
+当前真正注册的 provider 只有 3 个：
+- `openrouter`
+- `groq`
+- `opencode`
 
-- 主链路与抽象层并存但未统一（`server.ts` 直连逻辑 vs `ProviderRouter`/`CandidatePool`）
-- 免费模型过滤、provider 规则在多个模块重复
-- 测试与实现漂移严重（命名、掩码规则、导出符号、状态码语义）
-- 配置写入策略不统一（有写锁和无写锁混用）
-
-### 2.2 用户体验痛点
-
-- 配置步骤虽有 UI，但“当前状态 -> 下一步”不够强引导
-- 错误提示偏技术化，缺少“你该怎么做”
-- 模型刷新和可用性语义不清晰（列出免费模型 != 保证当前可用）
-- OpenClaw 配置逻辑仍偏向旧单 provider 认知
-- OpenCode 可用性差：拿到 key 后仍常出现“无可用模型”，缺少可解释的诊断与兜底
-- 缺少“手动添加模型”能力：OpenRouter 临时免费模型可能不带 `:free` 且价格字段非 0，当前无法由用户显式加入候选
+这次要补回/新增：
+- `gemini`
+- `github`
+- `mistral`
+- `cerebras`
+- `sambanova`
 ---
 
-## 3. 重构原则（避免过度工程）
+## 2. 总体策略
 
-- **KISS/YAGNI**：不引入数据库、不做复杂分布式能力。
-- **单一事实来源**：provider 规则、免费过滤、模型评分都只保留一个实现。
-- **分层隔离**：路由层只做 HTTP 协议，业务放 service 层。
-- **向后兼容优先**：保留现有关键 API 路径，逐步迁移。
-- **错误对小白友好**：统一错误码 + 人话文案 + 建议动作。
+先把每个 provider 当成独立接入点处理：
+
+1. 独立 key 保存
+2. 独立 key 校验
+3. 独立模型列表拉取
+4. 独立最小调用验证
+5. 独立 fallback/路由适配
+
+等全部跑通后，再看哪些逻辑能合并。
 
 ---
 
-## 4. 目标架构（分层）
+## 3. 计划拆分
 
-建议拆成 4 层：
+### 3.1 先扩展 provider 注册表
 
-1. **Routes 层**（HTTP）
-   - 只做入参校验、出参格式化、状态码映射。
-2. **Services 层**（业务）
-   - ChatService / ModelService / ConfigService / OpenClawService / HealthService。
-3. **Domain 层**（规则）
-   - provider 解析、免费过滤、评分、fallback 策略。
-4. **Infra 层**（IO）
-   - 文件存储、HTTP 客户端、时钟、日志。
+先把 provider 元信息补齐，不做统一抽象。
 
-### 目录建议
-
-```txt
-src/
-  app.ts
-  server.ts
-  routes/
-    chat.ts
-    admin.ts
-    setup.ts
-  services/
-    chat-service.ts
-    model-service.ts
-    config-service.ts
-    openclaw-service.ts
-    health-service.ts
-  domain/
-    provider.ts
-    model-filter.ts
-    model-rank.ts
-    fallback-engine.ts
-    errors.ts
-  infra/
-    env-repo.ts
-    config-repo.ts
-    rate-limit-repo.ts
-    http-client.ts
-    logger.ts
-  types/
-    api.ts
+```ts
+export const PROVIDERS: Provider[] = [
+  { name: 'openrouter', baseURL: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', format: 'openai', isFree: true },
+  { name: 'groq', baseURL: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY', format: 'openai', isFree: true },
+  { name: 'opencode', baseURL: 'https://opencode.ai/zen/v1', apiKeyEnv: 'OPENCODE_API_KEY', format: 'openai', isFree: true },
+  { name: 'gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta', apiKeyEnv: 'GEMINI_API_KEY', format: 'gemini', isFree: true },
+  { name: 'github', baseURL: 'https://models.github.ai/inference', apiKeyEnv: 'GITHUB_MODELS_API_KEY', format: 'openai', isFree: true },
+  { name: 'mistral', baseURL: 'https://api.mistral.ai/v1', apiKeyEnv: 'MISTRAL_API_KEY', format: 'openai', isFree: true },
+  { name: 'cerebras', baseURL: 'https://api.cerebras.ai/v1', apiKeyEnv: 'CEREBRAS_API_KEY', format: 'openai', isFree: true },
+  { name: 'sambanova', baseURL: 'https://api.sambanova.ai/v1', apiKeyEnv: 'SAMBANOVA_API_KEY', format: 'openai', isFree: true }
+];
 ```
 
 ---
 
-## 5. 后端重构方案
+### 3.2 配置层单独补 key 管理
 
-## 5.1 统一 Provider 与模型规则
-
-把 provider 能力集中为一个注册表 + 适配器，不再在 `server.ts` 手写分支。
-
-关键片段（示意）：
+`src/config.ts` 里把这些 key 都加进去，`getAllProviderKeysStatus()` 也跟着扩。
 
 ```ts
-export interface ProviderSpec {
-  name: 'openrouter' | 'groq' | 'opencode' | string;
-  baseURL: string;
-  apiKeyEnv: string;
-  supportsFreeTag?: boolean;
-  isModelFree(model: ProviderModel): boolean;
-}
-```
-
-收益：新增 provider 只需加一条 spec，不改主流程。
-
-## 5.2 引入 ChatService（收口主链路）
-
-将 `POST /v1/chat/completions` 的全部逻辑迁移到 `ChatService`：
-
-- 解析目标模型
-- 生成 fallback 链
-- 执行 provider 调用
-- 记录 rate-limit
-- 产出 `fallbackInfo`
-
-路由层仅保留：
-
-```ts
-const result = await chatService.complete(reqBody, reqHeaders);
-return toHttpResponse(result);
-```
-
-## 5.3 配置服务统一化
-
-把 `.env` / `config.json` 的读写都放到 `ConfigService`，禁止跨模块直接写文件。
-
-最小要求：
-
-- 全部写入走同一把锁
-- `.env` 写入后在非 Windows 系统 `chmod 600`
-- 避免 `ENV` 快照读旧值：运行时读取 `process.env`
-
-## 5.4 错误模型标准化
-
-定义统一业务错误码，路由层再映射为 HTTP 状态：
-
-```ts
-type AppErrorCode =
-  | 'NO_PROVIDER_KEY'
-  | 'MODEL_UNAVAILABLE'
-  | 'RATE_LIMITED'
-  | 'UPSTREAM_TIMEOUT'
-  | 'INVALID_INPUT';
-```
-
-每个错误返回：`code` + `message` + `hint`。
-
-示例：
-
-- message: `当前模型暂时不可用`
-- hint: `请点击“刷新模型”，或改用 auto`
-
-## 5.5 OpenClaw 服务重构
-
-- 继续保持自动检测 + 备份 + 合并 + 恢复。
-- 明确备份命名规范（推荐 `openclaw.bak1` 或时间戳二选一），并与测试完全一致。
-- 配置前置校验改为：任一可用 provider key 即可，不再绑定 OpenRouter。
-
-## 5.6 OpenCode 可用性专项改造
-
-目标：不是“列表里看起来有模型”，而是“用户能实际调用成功”。
-
-- 增加 `ProviderHealthService`：对每个 provider 做轻量探测（`/models`）+ 实际最小调用探测（`/chat/completions`，`max_tokens=1`）
-- OpenCode 模型可用性从“名称/后缀推断”改为“调用验证优先”
-- 在 `/admin/models` 中返回每个模型的 `verified` 与 `lastCheckedAt`
-- 若 OpenCode 探测失败，返回可读原因（网络不可达 / key 无效 / 模型不可调用）与建议操作
-
-关键片段（示意）：
-
-```ts
-type ModelAvailability = {
-  id: string;
-  provider: string;
-  verified: boolean;
-  reason?: 'auth_failed' | 'network_error' | 'model_unavailable';
-  lastCheckedAt: number;
+const PROVIDER_ENV_MAP: Record<string, string> = {
+  openrouter: 'OPENROUTER_API_KEY',
+  groq: 'GROQ_API_KEY',
+  opencode: 'OPENCODE_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  github: 'GITHUB_MODELS_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  sambanova: 'SAMBANOVA_API_KEY'
 };
 ```
 
-## 5.7 手动模型白名单（解决“临时免费模型”）
+重点：
+- 不要把不同 provider 的 key 校验混成同一个逻辑。
+- 哪个 provider 需要特殊格式，就单独处理。
 
-新增“用户可控候选”机制：允许用户手动添加任意 provider/model，并优先参与 fallback。
+---
 
-- 新增配置项：`config.customModels[]`
-- 新增接口：
-  - `POST /api/custom-models/verify`：先做最小调用验证
-  - `POST /api/custom-models`：保存已验证模型
-  - `GET /api/custom-models`、`DELETE /api/custom-models/:id`
-- fallback 链策略：`customModels`（按用户顺序）优先于自动发现免费模型
-- UI 提供“添加模型 ID”入口，并展示验证结果（可用/不可用 + 原因）
+### 3.3 UI 先显示完整供应商卡片
 
-关键片段（示意）：
+页面先把 8 个 provider 都显示出来，不等后端统一完美。
 
 ```ts
-interface CustomModelConfig {
-  provider: string;
-  modelId: string;
-  priority: number;
-  enabled: boolean;
+const providers = [
+  'openrouter', 'groq', 'opencode', 'gemini',
+  'github', 'mistral', 'cerebras', 'sambanova'
+];
+```
+
+每个卡片展示：
+- 名称
+- key 状态
+- 获取地址
+- 独立“验证”按钮
+
+---
+
+## 4. 每个 provider 的独立接入方案
+
+### 4.1 Gemini
+
+特点：
+- 官方模型名带 `models/` 前缀
+- 需要单独做模型名规范化
+- `generateContent` 和 OpenAI 风格不完全一致时，保留独立逻辑
+
+关键片段：
+
+```ts
+function normalizeGeminiModelId(modelId: string): string {
+  return modelId.startsWith('models/') ? modelId : `models/${modelId}`;
 }
+```
+
+验证策略：
+- 先 `GET /models`
+- 再对 `gemini-3.1-flash-lite-preview` 做最小 `generateContent`
+
+---
+
+### 4.2 GitHub Models
+
+特点：
+- 路径和模型命名可能与 OpenAI 接口相近
+- 但模型 id 可能需要单独清洗
+- 这次优先接入 GitHub Models 的免费模型，key 直接参考 `.env` 里的 `GITHUB_MODELS_API_KEY`
+
+建议：
+- 先独立写 `github` provider 适配
+- 先验证 `models` 拉取是否稳定
+- 再接最小 chat 调用
+
+---
+
+### 4.3 Mistral
+
+特点：
+- OpenAI 兼容度高，但不要默认完全一致
+- 先按独立 provider 处理
+
+建议：
+- 独立 key 校验
+- 独立模型发现
+- 独立 fallback 标签
+
+---
+
+### 4.4 Cerebras
+
+特点：
+- 可能模型少，但速度快
+- 先独立接入，不要提前合并到统一 provider 逻辑
+
+---
+
+### 4.5 SambaNova
+
+特点：
+- 接口和模型可用性可能有自己的限制
+- 先独立验证最小调用
+
+---
+
+## 5. 路由层改造
+
+不要在 `server.ts` 里继续堆大分支，先做“每 provider 一个执行器”。
+
+```ts
+type ProviderExecutor = {
+  validateKey: (apiKey: string) => Promise<boolean>;
+  listModels: (apiKey: string) => Promise<Model[]>;
+  chat: (apiKey: string, body: unknown) => Promise<Response>;
+};
+```
+
+不是统一抽象成一个大工厂，而是：
+- 每个 provider 有自己的 executor 文件
+- `server.ts` 只负责选中 provider 然后调用对应 executor
+
+示意：
+
+```ts
+const executor = getProviderExecutor(provider);
+const ok = await executor.validateKey(apiKey);
 ```
 
 ---
 
-## 6. 前端体验重构方案（重点）
+## 6. fallback 策略
 
-目标：让小白按“向导”完成配置，减少理解成本。
+先不做“全 provider 统一评分模型”。
 
-## 6.1 三段式向导（强引导）
+阶段 1：
+- 每个 provider 只要能返回可用模型就算成功
+- fallback 只按可用性和失败历史排序
 
-1. **连接供应商**（至少 1 个成功）
-2. **选择模式**（推荐 `auto`，高级用户可手选）
-3. **连接客户端**（OpenClaw 一键配置 + 验证）
+阶段 2：
+- 再考虑是否把一些共性逻辑合并
 
-每一步提供状态：`未开始 / 进行中 / 已完成 / 失败`。
-
-## 6.2 新手与高级双模式
-
-- **新手模式（默认）**：只显示必要按钮和推荐路径。
-- **高级模式**：显示 provider 明细、模型过滤、原始错误详情。
-
-## 6.3 错误提示升级
-
-统一 UI 提示结构：
-
-- 发生了什么（1 句话）
-- 你可以怎么做（最多 2 步）
-- 需要等待多久（如限流冷却时间）
-
-示例文案：
-
-- `Groq 当前触发限流，建议 30 分钟后重试；你也可以立即切换到 auto。`
-
-## 6.4 首次使用健康检查
-
-新增“快速自检”按钮，检查：
-
-- 服务是否启动
-- 至少一个 key 是否有效
-- 是否有可用免费模型
-- OpenClaw 配置是否存在且合法
-- OpenCode 是否可真实调用（非仅 key 有效）
-
-全部通过后给一条可复制命令：`/model free_proxy/auto`。
-
-## 6.5 新增“手动添加模型”交互
-
-- 入口：模型页增加“手动添加模型”按钮（默认折叠）
-- 表单：`provider` + `modelId`
-- 流程：先“验证可用性”再“保存到候选”
-- 展示：在模型列表中用 `手动` 标签标识，可单独开关启用/禁用
-- 文案：明确告诉用户“适合限时免费或价格字段不准确的模型”
+关键点：
+- Gemini / GitHub Models / Mistral / Cerebras / SambaNova 不强行共用同一套评分规则
 
 ---
 
-## 7. 测试与质量门禁重建
+## 7. 验收顺序
 
-## 7.1 测试分层
+按这个顺序推进：
 
-- **Domain 单测**：免费过滤、排序、fallback 纯逻辑
-- **Service 单测**：mock HTTP/文件系统，验证业务语义
-- **Route 集成测**：只测协议契约、状态码、返回体
-- **E2E 冒烟**：从 key 配置到 `/v1/chat/completions` 成功调用
-
-## 7.2 先修复漂移，再扩展
-
-第一步不是加新测试，而是让现有测试对齐当前协议：
-
-- 掩码规则
-- 备份命名
-- 不存在的导出引用
-- 清理逻辑与真实文件产物一致
-
-## 7.3 CI 门禁（建议）
-
-- `npm test`
-- `npx tsc --noEmit`
-- 关键 lint（可选）
+1. `PROVIDERS` 扩展到 8 个
+2. `.env` / key 状态显示完整
+3. 每个 provider 都能单独验证 key
+4. 每个 provider 至少能拉到模型列表
+5. 每个 provider 至少能跑通一个最小调用
+6. 每个 provider 至少有 1 个 smoke test，验证模型调用成功
+7. UI 能看到 8 个供应商
+8. 再考虑 fallback 和统一化
 
 ---
 
-## 8. 实施阶段计划（建议 4 个迭代）
+## 8. 暂不做的事
 
-## Phase 1：打地基（1-2 天）
-
-- 建立 `services/domain/infra` 目录
-- 抽离 `ConfigService`、`HttpClient`
-- 修复测试漂移（不改业务语义）
-
-交付：测试恢复可用，代码结构初步分层。
-
-## Phase 2：主链路迁移（2-3 天）
-
-- `ChatService` 接管 `/v1/chat/completions`
-- 合并重复的免费过滤/provider 规则
-- 统一错误码与响应结构
-- 加入 OpenCode 可用性探测与诊断返回
-
-交付：代理主流程完成服务化，回归测试全绿。
-
-## Phase 3：体验升级（2 天）
-
-- 前端改为向导式流程
-- 新手/高级模式开关
-- 健康检查与可操作提示
-- 增加“手动添加模型”入口与可用性验证流程
-
-交付：小白用户从启动到可用更顺滑。
-
-## Phase 4：收尾与文档（1 天）
-
-- README 重写（5 分钟上手 + FAQ）
-- 补充排障文档（限流、网络、OpenClaw）
-- 清理未接入的历史代码或正式接入
-
-交付：可维护、可交接、可长期演进。
+- 不提前做统一 provider adapter
+- 不提前合并成同一个 chat 请求路径
+- 不提前做数据库
+- 不提前做复杂权限系统
 
 ---
 
-## 9. 风险与回滚策略
+## 9. TODO 列表
 
-### 风险
+### 阶段 1：打通基础接入
 
-- 主链路重构时引入行为变化（fallback 顺序、错误码）
-- UI 交互改动导致旧用户不适应
+- [ ] 扩展 `PROVIDERS` 注册表，加入 `gemini` / `github` / `mistral` / `cerebras` / `sambanova`
+- [ ] 扩展 `PROVIDER_ENV_MAP` 和 `getAllProviderKeysStatus()`
+- [ ] 更新 UI，显示 8 个供应商卡片和独立 key 状态
+- [ ] 为每个 provider 补独立验证入口
 
-### 控制
+### 阶段 2：独立 provider 逻辑
 
-- 每个 Phase 都保留可运行版本
-- 对外接口尽量兼容，必要时增加 `v2` 字段而非直接破坏
-- 为关键行为加快照测试（响应头、fallback 信息）
+- [ ] 为 `gemini` 编写独立模型名规范化和最小调用验证
+- [ ] 为 `github` 编写独立模型拉取和最小调用验证
+- [ ] 为 `mistral` 编写独立 key 校验、模型拉取和最小调用验证
+- [ ] 为 `cerebras` 编写独立 key 校验、模型拉取和最小调用验证
+- [ ] 为 `sambanova` 编写独立 key 校验、模型拉取和最小调用验证
 
-### 回滚
+### 阶段 3：路由与 fallback
 
-- 保留旧路由实现一段时间（feature flag）
-- 若线上本地使用异常，可快速切回旧 Chat 路径
+- [ ] 为每个 provider 拆出独立 executor
+- [ ] 让 `server.ts` 只负责选择 provider 并转发
+- [ ] 保留 provider 专属 fallback 规则，不强行统一评分
 
----
+### 阶段 4：测试与验收
 
-## 10. 最小可落地版本（MVP 重构包）
-
-如果希望最快见效，先做这 6 件事：
-
-1. 把主链路迁到 `ChatService`（路由瘦身）
-2. 统一 provider/免费过滤规则来源
-3. 统一配置读写入口（含权限/锁）
-4. 修复所有测试漂移，让 CI 可相信
-5. 前端加入“向导 + 健康检查”
-6. 重写 README 为小白版
-
-这 6 项完成后，项目维护成本和用户体验都会有明显提升，且不会引入过度工程。
-
----
-
-## TODO List（执行跟踪）
-
-- [x] T1：统一并收敛配置读写入口（含 `.env` 权限与并发写保护）
-- [x] T2：实现 ProviderHealthService（provider 探测 + 模型最小调用验证）
-- [x] T3：升级 `/admin/models`（支持 `refresh`、返回 `verified/lastCheckedAt/reason`）
-- [x] T4：实现手动模型白名单 API（verify/list/add/delete + priority/enabled）
-- [x] T5：升级 fallback 引擎（优先 customModels，并与限流状态协同）
-- [x] T6：优化 OpenClaw 配置前置校验（任一 provider key 可用即可）
-- [x] T7：前端增加“快速自检”与“手动添加模型”完整流程
-- [x] T8：补齐/重构测试（覆盖新增能力，移除漂移用例）
-- [x] T9：全量执行 `npm test`，确保测试全绿
-- [x] T10：回填文档状态，标记全部任务完成并输出结果
+- [ ] 为每个 provider 增加至少 1 个 smoke test
+- [ ] 确认每个 provider 都能返回模型列表
+- [ ] 确认每个 provider 都能完成一次最小调用
+- [ ] 确认 UI / API / 测试结果一致
+- [ ] 再决定哪些逻辑可以合并重构
