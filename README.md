@@ -2,9 +2,21 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个本地 AI 代理工具：聚合 OpenRouter / Groq / OpenCode / Gemini / GitHub Models / Mistral / Cerebras / SambaNova 的可用模型，自动回退，减少手动换模型。
+OpenClaw 免费 token 池：8 家 provider，免费、快、日常使用足够稳定。
 
-适合个人使用，目标是「能稳定用上免费或低成本模型」。
+把 OpenRouter / Groq / OpenCode / Gemini / GitHub Models / Mistral / Cerebras / SambaNova 的免费层拼成一个可用池。
+
+可用的免费模型包括 `DeepSeek-V3.2`、`gemini-3.1-flash-lite`、`kimi-k2`、`GLM 4.5 Air`、`Step 3.5 Flash`、`GPT-4o Mini`，适合个人开发和日常编码。
+
+### 免费额度亮点
+
+| 方案 | 稳定性 | 额度感受 | 成本 | 适合谁 |
+|---|---|---|---|---|
+| `free_proxy` | 中等，靠 fallback 保底 | 多家免费层叠加，适合长期凑出可用免费额度 | 免费 | 个人开发、日常编码、轻中度问答 |
+| 美国付费 coding plan | 高 | 额度清晰，但通常按单一订阅计算 | 20-200USD/月 | 需要稳定和统一体验的人 |
+| 国内付费 coding plan | 高 | 稳定，通常更适合固定工作流 | 20-200RMB/月 | 重视本地化、售后和长期稳定的人 |
+
+free_proxy 的卖点很直接：让 OpenClaw 先用上免费 token，再用自动回退把可用性兜住。
 
 ## 功能
 
@@ -34,8 +46,10 @@ npm start
 
 - 浏览器访问：`http://localhost:8765`
 - 至少保存 1 个 provider 的 API Key
-- 选择模型（推荐 `openrouter/auto:free`）
+//让大家都申请，每家的供应商都各有特色
 
+- 选择模型（推荐 `openrouter/auto:free`）
+//去掉推荐模型
 ## 页面怎么用（小白版）
 
 ### 第一步：保存 API Key（至少一个）
@@ -57,7 +71,8 @@ npm start
 
 - 点“刷新模型列表”加载可用模型
 - 选一个你要用的模型，点“选择”
-- 不确定就选 `openrouter/auto:free`
+- 建议选择新出的大模型，通常免费量比较慷慨
+
 
 ### 第三步：必要时手动添加模型
 
@@ -119,44 +134,14 @@ npm test
 npx tsc --noEmit
 ```
 
-## 项目现状（小白可读）
+## 为什么好用
 
-目前这个项目已经稳定支持 8 个 provider：
+- OpenClaw 直接填 `free_proxy/auto` 就能用免费 token。
+- 前端只做卡片式配置和直接选模型，不绕验证。
+- 后端负责拉取模型、转发请求、自动回退。
+- 免费模型会优先参与候选，遇到限流会自动换下一个。
 
-- OpenRouter
-- Groq
-- OpenCode Zen
-- Gemini
-- GitHub Models
-- Mistral
-- Cerebras
-- SambaNova
-
-### 当前架构做了什么
-
-- 前端只负责配置和直接选模型。
-- 后端负责三件事：
-  - 拉取各 provider 模型列表
-  - 请求转发（OpenAI 兼容接口）
-  - 自动回退（当前模型失败时换下一个）
-
-### 现在的行为特点
-
-- 不同 provider 用不同的必要请求头（不是一刀切），避免“某家能用、某家 400/403”的问题。
-- Gemini 会自动做模型名规范化（`models/...`），减少调用报错。
-- OpenRouter / OpenCode 的免费模型会优先参与候选，但如果上游限流会自动降级到其他 provider。
-- 某模型恢复可用后，会自动从本地限流状态里清掉，不会长期被误跳过。
-
-### 测试覆盖情况
-
-- 已有测试 + 新增测试覆盖了：
-  - provider header / 模型名规范化
-  - fallback 关键路径与限流清理
-  - 模型识别与归一化逻辑
-  - 多 provider 的基础 API 行为
-- 发布前建议再运行一次：
-  - `npm test`
-  - `npx tsc --noEmit`
+发布前建议再运行一次：`npm test` 和 `npx tsc --noEmit`
 
 如果你是第一次接触这类代理，可以这样理解：
 

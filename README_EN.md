@@ -2,9 +2,21 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-A local AI proxy that aggregates models from OpenRouter / Groq / OpenCode / Gemini / GitHub Models / Mistral / Cerebras / SambaNova and automatically falls back when a model fails.
+OpenClaw's free token pool: 8 providers, free, fast, and stable enough for daily use.
 
-Built for personal use: simple setup, stable usage.
+It pools the free tiers of OpenRouter / Groq / OpenCode / Gemini / GitHub Models / Mistral / Cerebras / SambaNova into one usable stack.
+
+Available free models include `DeepSeek-V3.2`, `gemini-3.1-flash-lite`, `kimi-k2`, `GLM 4.5 Air`, `Step 3.5 Flash`, and `GPT-4o Mini`.
+
+### Free-tier highlight
+
+| Option | Stability | Capacity feel | Cost | Best for |
+|---|---|---|---|---|
+| `free_proxy` | Medium, with fallback protection | Combined free tiers can keep you supplied for longer | Free | Personal coding, daily Q&A, light to medium use |
+| US paid coding plan | High | Clear limits, but usually tied to one subscription | 20-200USD/month | Users who want a stable, uniform experience |
+| China paid coding plan | High | Stable and workflow-friendly | 20-200RMB/month | Users who value local support and predictable usage |
+
+free_proxy gives OpenClaw a free token path first, then keeps requests flowing with fallback.
 
 ## Features
 
@@ -82,28 +94,14 @@ Client API key:
 
 ## Current status
 
-This project now supports 8 providers:
-
-- OpenRouter
-- Groq
-- OpenCode Zen
-- Gemini
-- GitHub Models
-- Mistral
-- Cerebras
-- SambaNova
+This project supports 8 providers: OpenRouter, Groq, OpenCode Zen, Gemini, GitHub Models, Mistral, Cerebras, and SambaNova.
 
 ### What the app does now
 
 - The UI saves provider keys in compact cards.
-- Model selection is direct: click a model, and it becomes the active one.
-- Manual model add no longer asks for a verification step.
+- Model selection is direct: click a model, and it becomes active.
+- Manual model add no longer asks for verification.
 - Backend fallback still protects you if a model becomes unavailable.
-
-### Notes for beginners
-
-- This is not a single-model proxy.
-- Think of it as a small model router: it tries your chosen model first, then falls back automatically if needed.
 
 ## OpenClaw (optional)
 
