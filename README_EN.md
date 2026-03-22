@@ -8,20 +8,13 @@ One-line overview: free, easy to use, and enough for everyday OpenClaw usage.
 
 ### Free-tier overview
 
-**`free_proxy`**  
-Stability: Medium  
-Quota: Estimate ~3.3k requests/day (~100k/month), about 300USD/month equivalent, supports 3–5 concurrent users  
-Cost: Free
+| Option | Stability | Quota | Cost |
+|---|---|---|---|
+| `free_proxy` | Medium | Estimate ~3.3k requests/day<br>~100k requests/month<br>~300USD/month equivalent | Free |
+| US paid coding plan | High | About 200–10,000 requests/month | 20-200USD/month |
+| China paid coding plan | High | Lite 18,000 requests/month<br>Pro 90,000 requests/month | 20-200RMB/month |
 
-**US paid coding plan**  
-Stability: High  
-Quota: About 200–10,000 requests/month  
-Cost: 20-200USD/month
-
-**China paid coding plan**  
-Stability: High  
-Quota: Lite 18,000 requests/month; Pro 90,000 requests/month  
-Cost: 20-200RMB/month
+Note: the numbers above are conservative estimates and vary by provider/region/account. Alibaba Coding Plan reference: https://developer.aliyun.com/article/1713813
 
 ## Core features
 
