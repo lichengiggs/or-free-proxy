@@ -12,7 +12,7 @@ Available free models include `DeepSeek-V3.2`, `gemini-3.1-flash-lite`, `kimi-k2
 
 | Option | Stability | Quota | Cost |
 |---|---:|---|---:|
-| `free_proxy` | Medium, with fallback protection | Estimate: ~2k–12k 1k-token calls/month (~70–400 requests/day) — conservative aggregated estimate (see footnote) | Free |
+| `free_proxy` | Medium, with fallback protection | Estimate: ~3.3k requests/day (~100k requests/month); equivalent value ~300USD/month; supports concurrent use (3–5 devs). Based on 2026-03 audit of configured providers and keys. | Free |
 | US paid coding plan (OpenAI example) | High | Approx: 200–10,000 1k-token calls/month (representing ~20–200USD/month spending; estimate) | 20-200USD/month |
 | China paid coding plan (Alibaba Coding Plan) | High | Lite: 18,000 requests/month; Pro: 90,000 requests/month (official plan limits) | Lite: 7.9RMB (first month); Pro: 39.9RMB (first month) |
 
