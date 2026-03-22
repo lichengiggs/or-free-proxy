@@ -10,13 +10,15 @@ Available free models include `DeepSeek-V3.2`, `gemini-3.1-flash-lite`, `kimi-k2
 
 ### Free-tier highlight
 
-| Option | Stability | Capacity feel | Cost | Best for |
-|---|---|---|---|---|
-| `free_proxy` | Medium, with fallback protection | Combined free tiers can keep you supplied for longer | Free | Personal coding, daily Q&A, light to medium use |
-| US paid coding plan | High | Clear limits, but usually tied to one subscription | 20-200USD/month | Users who want a stable, uniform experience |
-| China paid coding plan | High | Stable and workflow-friendly | 20-200RMB/month | Users who value local support and predictable usage |
+| Option | Stability | Quota | Cost |
+|---|---:|---|---:|
+| `free_proxy` | Medium, with fallback protection | Estimate: ~2k–12k 1k-token calls/month (~70–400 requests/day) — conservative aggregated estimate (see footnote) | Free |
+| US paid coding plan (OpenAI example) | High | Approx: 200–10,000 1k-token calls/month (representing ~20–200USD/month spending; estimate) | 20-200USD/month |
+| China paid coding plan (Alibaba Coding Plan) | High | Lite: 18,000 requests/month; Pro: 90,000 requests/month (official plan limits) | Lite: 7.9RMB (first month); Pro: 39.9RMB (first month) |
 
 free_proxy gives OpenClaw a free token path first, then keeps requests flowing with fallback.
+
+Quota numbers are conservative estimates and vary by provider/region/account; free_proxy aggregates free tiers — actual results depend on upstream limits. Sources: OpenAI pricing: https://platform.openai.com/pricing, Anthropic pricing: https://www.anthropic.com/pricing, Alibaba Coding Plan reference: https://developer.aliyun.com/article/1713813
 
 ## Features
 
