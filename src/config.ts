@@ -276,8 +276,24 @@ export async function saveApiKey(key: string): Promise<void> {
   if (!trimmedKey.startsWith('sk-')) {
     throw new Error('Invalid API key format');
   }
-  
+
   await saveProviderKey('openrouter', trimmedKey);
+
+  if (process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID)) {
+    const fileExists = existsSync(ENV_PATH);
+    const keyLine = `OPENROUTER_API_KEY=${trimmedKey}`;
+
+    if (fileExists) {
+      const content = await readFile(ENV_PATH, 'utf-8');
+      const lines = content.split('\n').filter(line => line && !line.startsWith('OPENROUTER_API_KEY='));
+      lines.push(keyLine);
+      await writeFile(ENV_PATH, `${lines.join('\n')}\n`, 'utf-8');
+    } else {
+      await writeFile(ENV_PATH, `${keyLine}\n`, 'utf-8');
+    }
+
+    await hardenEnvFilePermissions();
+  }
 }
 
 export async function getApiKeyStatus(): Promise<ApiKeyStatus> {

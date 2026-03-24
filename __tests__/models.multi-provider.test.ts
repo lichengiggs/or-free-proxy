@@ -2,8 +2,43 @@ import { fetchAllModels, fetchProviderModels, __MODEL_TEST_ONLY__ } from '../src
 import { PROVIDERS } from '../src/providers/registry';
 
 describe('Multi-Provider Model Fetching', () => {
+  const originalFetch = global.fetch;
+
   beforeEach(() => {
     __MODEL_TEST_ONLY__.clearProviderModelCache();
+    process.env.NODE_ENV = 'test';
+    global.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes('openrouter.ai')) {
+        return new Response(JSON.stringify({ data: [{ id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (url.includes('api.groq.com')) {
+        throw new Error('network down');
+      }
+      if (url.includes('generativelanguage.googleapis.com')) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (url.includes('models.github.ai')) {
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
   describe('fetchAllModels', () => {

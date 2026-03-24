@@ -4,6 +4,7 @@ import { getCustomModels } from './config';
 import type { Model } from './providers/types';
 import { getLatestVerification } from './provider-health';
 import { isKnownProvider } from './providers/registry';
+import { loadModelDictionary, orderModelsByDictionary } from './model-dictionary';
 
 export interface FallbackResult {
   model: string;
@@ -53,6 +54,16 @@ function summarizeFailure(error?: ExecuteError): string {
 // 模型可用性状态（内存中，重启重置）
 // 1 = 可用，0 = 最近失败过
 const modelAvailability = new Map<string, number>();
+
+function logFallback(message: string): void {
+  if (process.env.NODE_ENV === 'test') return;
+  console.log(message);
+}
+
+function logFallbackError(message: string, error: unknown): void {
+  if (process.env.NODE_ENV === 'test') return;
+  console.error(message, error);
+}
 
 function isModelAvailable(modelId: string): boolean {
   return (modelAvailability.get(modelId) ?? 1) === 1;
@@ -130,7 +141,8 @@ function scoreModel(model: Model): number {
 }
 
 function rankAllModels(models: Model[]): { model: Model; score: number; available: boolean }[] {
-  return models.map(model => ({
+  const orderedModels = orderModelsByDictionary(models, null);
+  return orderedModels.map(model => ({
     model,
     score: Math.round(scoreModel(model)),
     available: isModelAvailable(model.id)
@@ -160,17 +172,19 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
       }
     }
   } catch (err) {
-    console.error('[Fallback] Failed to load custom models:', err);
+    logFallbackError('[Fallback] Failed to load custom models:', err);
   }
 
   try {
     // 获取所有 provider 的模型
     const allModels = await fetchAllModels();
+    const dictionary = await loadModelDictionary();
     
     // 过滤免费模型
     const freeModels = allModels.filter(m => isEffectivelyFreeModel(m));
-    
-    const ranked = rankAllModels(freeModels);
+
+    const orderedFreeModels = orderModelsByDictionary(freeModels, dictionary);
+    const ranked = rankAllModels(orderedFreeModels);
     const preferredProvider = preferredModel ? parseModelProvider(preferredModel) : null;
 
     if (preferredProvider) {
@@ -197,7 +211,7 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
       if (!chain.includes(modelId)) chain.push(modelId);
     }
   } catch (err) {
-    console.error('[Fallback] Failed to get fallback models:', err);
+    logFallbackError('[Fallback] Failed to get fallback models:', err);
   }
 
   if (!chain.includes('openrouter/auto:free')) {
@@ -218,7 +232,7 @@ export async function executeWithFallback<T>(
 
   for (const model of chain) {
     if (isModelRateLimited(model)) {
-      console.log(`[Fallback] Skipping ${model} (rate limited)`);
+      logFallback(`[Fallback] Skipping ${model} (rate limited)`);
       attemptedModels.push(`${model}(rate_limited)`);
       continue;
     }
@@ -229,12 +243,12 @@ export async function executeWithFallback<T>(
       // 模型成功，标记为可用
       if (!isModelAvailable(model)) {
         markModelAvailable(model);
-        console.log(`[Fallback] ${model} recovered and now available`);
+        logFallback(`[Fallback] ${model} recovered and now available`);
       }
       await clearModelRateLimited(model);
       
       if (model !== preferredModel) {
-        console.log(`[Fallback] ${preferredModel || 'default'} failed, using ${model}`);
+        logFallback(`[Fallback] ${preferredModel || 'default'} failed, using ${model}`);
       }
       return {
         result: response,
@@ -255,7 +269,7 @@ export async function executeWithFallback<T>(
     attemptedErrors.push({ model, error });
 
     if (isFirstAttempt && chain.length > 1) {
-      console.log(`[Fallback] ${model} failed, trying alternatives...`);
+      logFallback(`[Fallback] ${model} failed, trying alternatives...`);
       isFirstAttempt = false;
     }
 

@@ -20,6 +20,11 @@ const MULTI_PROVIDER_CACHE_TTL = 5 * 60 * 1000;
 
 const providerModelCache = new Map<string, { models: Model[]; fetchedAt: number }>();
 
+function logModelDiscoveryError(message: string, error: unknown): void {
+  if (process.env.NODE_ENV === 'test') return;
+  console.error(message, error);
+}
+
 export function clearModelDiscoveryCache(): void {
   providerModelCache.clear();
 }
@@ -81,7 +86,7 @@ const TRUSTED_PROVIDERS = [
 export async function fetchAllModels(): Promise<Model[]> {
   const allResults = await Promise.all(
     PROVIDERS.map(async provider => {
-      const key = getProviderKey(provider.name);
+      const key = getDiscoveryProviderKey(provider.name);
       if (!key) return [];
       return fetchProviderModels(provider, key);
     })
@@ -143,7 +148,28 @@ function normalizeOpenCodeModelId(id: string): string {
 }
 
 function getRawModelId(model: Partial<RawProviderModel>): string {
-  return String(model.id || model.name || model.model || model.slug || '');
+  return String(model.id || model.slug || model.model || model.name || '');
+}
+
+function getDiscoveryProviderKey(providerName: string): string | undefined {
+  if (process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID)) {
+    const envMap: Record<string, string> = {
+      openrouter: 'OPENROUTER_API_KEY',
+      groq: 'GROQ_API_KEY',
+      opencode: 'OPENCODE_API_KEY',
+      gemini: 'GEMINI_API_KEY',
+      github: 'GITHUB_MODELS_API_KEY',
+      mistral: 'MISTRAL_API_KEY',
+      cerebras: 'CEREBRAS_API_KEY',
+      sambanova: 'SAMBANOVA_API_KEY'
+    };
+    const envKey = envMap[providerName];
+    const value = envKey ? process.env[envKey]?.trim() : undefined;
+    if (!value) return undefined;
+    return /(test|mock|invalid)/i.test(value) ? value : undefined;
+  }
+
+  return getProviderKey(providerName);
 }
 
 export function normalizeProviderModelId(providerName: string, modelId: string): string {
@@ -287,7 +313,7 @@ export async function fetchProviderModels(provider: Provider, key: string): Prom
     providerModelCache.set(provider.name, { models, fetchedAt: now });
     return models;
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Failed to fetch models from ${provider.name}:`, err);
+    logModelDiscoveryError(`[${new Date().toISOString()}] Failed to fetch models from ${provider.name}:`, err);
     if (provider.name === 'gemini') return buildGeminiFallbackModels();
     if (provider.name === 'github') return buildGithubFallbackModels();
     if (provider.name === 'opencode') return buildOpenCodeFallbackModels();

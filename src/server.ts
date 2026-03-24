@@ -9,6 +9,7 @@ import { executeWithFallback } from './fallback';
 import { detectOpenClawConfig, configureOpenClawModel, listBackups, restoreBackup } from './openclaw-config';
 import { PROVIDERS, isKnownProvider } from './providers/registry';
 import { validateProviderKey, validateProviderKeyWithKey, verifyModelAvailability, type VerifyReason, buildProviderHeaders, normalizeVerificationModelId } from './provider-health';
+import { loadModelDictionary, orderModelsByDictionary, triggerBackgroundDictionaryUpdate } from './model-dictionary';
 
 const app = new Hono();
 
@@ -107,6 +108,11 @@ function verifyReasonToMessage(reason?: VerifyReason): string | undefined {
   if (reason === 'auth_failed') return 'API key 无效或权限不足';
   if (reason === 'network_error') return '网络连接失败，请检查网络或代理设置';
   return '模型不可用或当前 provider 暂不可用';
+}
+
+function logServerError(scope: string, error: unknown): void {
+  if (process.env.NODE_ENV === 'test') return;
+  console.error(`[${scope}]`, error);
 }
 
 function mapGeminiFinishReason(reason?: string): string {
@@ -397,11 +403,14 @@ app.get('/admin/models', async (c) => {
     if (shouldRefresh) {
       verificationStatus.clear();
     }
-    startBackgroundModelVerification(freeModels);
+    const dictionary = await loadModelDictionary();
+    const orderedFreeModels = orderModelsByDictionary(freeModels, dictionary);
+
+    startBackgroundModelVerification(orderedFreeModels);
     
     const config = await getConfig();
 
-    const displayModels = normalizeProviderModels(freeModels);
+    const displayModels = normalizeProviderModels(orderedFreeModels);
 
     return c.json({
       models: displayModels.map(model => ({
@@ -422,7 +431,7 @@ app.get('/admin/models', async (c) => {
       validating: verifyingInBackground
     });
   } catch (err: any) {
-    console.error('Error fetching models:', err);
+    logServerError('Error fetching models', err);
     return c.json({
       error: err.message,
       details: err.toString(),
@@ -770,6 +779,7 @@ app.post('/api/restore-backup', async (c) => {
 // 启动服务
 if (process.env.NODE_ENV !== 'test') {
   console.log(`🚀 OpenRouter Free Proxy starting on http://localhost:${ENV.PORT}`);
+  void triggerBackgroundDictionaryUpdate();
   serve({
     fetch: app.fetch,
     port: ENV.PORT

@@ -1,636 +1,433 @@
-# OpenClaw 双按钮配置改造计划
+# models.dev 本地字典开发蓝图
 
-## 目标
+需求源
+- 唯一需求源为仓库根的 `spec.md`。
+- 本文只展开 `spec.md` 已确认的需求，不引入额外产品假设。
 
-把当前单个“更新 OpenClaw 配置”按钮拆成两个明确动作，降低小白误解：
+## 1. Architecture & Design
 
-1. `设为 OpenClaw 默认模型`
-2. `设为 OpenClaw 备用模型`
+### 1.1 目标
+- 将 `https://models.dev/` 的模型信息固化为本地 JSON 字典，供服务离线读取。
+- 启动时优先读取本地缓存，并在后台异步更新，不阻塞服务启动。
+- 通过硬过滤 + 家族分层 + 轻量排序，把更可能的优质模型放到前面，同时保持实现简单可维护。
 
-核心目的不是只把 `free-proxy` provider 写进去，而是让用户点击后，`openclaw.json` 里的实际使用模型也切到 `free-proxy/auto`。
----
-
-## 关键结论
-
-基于现有代码和 OpenClaw 配置文档，模型默认/备用位置应使用：
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "free-proxy/auto",
-        "fallbacks": ["free-proxy/auto"]
-      },
-      "models": {
-        "free-proxy/auto": {}
-      }
-    }
-  }
-}
-```
-
-不是现在项目里写的 `agents.defaults.models['free-proxy/auto']` 这一层就够了；那只是 allowlist/模型声明，不等于“被设成默认模型”。
-
-所以这次改造的本质是：
-
-- 保留 `models.providers.free-proxy`
-- 保留/补齐 `agents.defaults.models['free-proxy/auto']`
-- 再明确写入 `agents.defaults.model.primary` 或 `agents.defaults.model.fallbacks`
-
----
-
-## 当前问题
-
-现状在 `src/openclaw-config.ts`：
-
-1. 只写了 `models.providers.free-proxy`
-2. 只写了 `agents.defaults.models['free-proxy/auto'] = {}`
-3. 没有写 `agents.defaults.model.primary`
-4. 没有写 `agents.defaults.model.fallbacks`
-
-结果是：
-
-- 用户点了“更新 OpenClaw 配置”
-- `free-proxy` provider 的确进了配置文件
-- 但 OpenClaw 的默认模型没切过去
-- 小白会理解成“free-proxy 没生效”
-
----
-
-## 改造范围
-
-### 需要修改
-
-- `src/openclaw-config.ts`
+### 1.2 模块设计
+- `scripts/update-models.js`
+  - 职责：抓取、解析、标准化、过滤、分层排序、原子写入本地字典。
+- `src/model-dictionary.ts`
+  - 职责：加载本地字典、暴露读取接口、触发后台更新、封装失败回退。
 - `src/server.ts`
-- `public/index.html`
-- `__tests__/openclaw-config.test.ts`
+  - 职责：服务启动时调用字典加载与后台更新入口。
+- `data/models.dev.json`
+  - 职责：本地离线字典主文件。
+- `data/models.dev.json.bak.*`
+  - 职责：更新前备份，保障可回滚。
 
-### 暂不修改
+### 1.3 数据流
+1. 服务启动。
+2. `src/model-dictionary.ts` 先读取 `data/models.dev.json`。
+3. 若文件存在，立即提供给后续模型选择逻辑使用。
+4. 同时后台触发 `scripts/update-models.js` 的更新流程。
+5. 更新脚本从 `models.dev` 获取原始数据。
+6. 解析出标准字段并保留 `raw`。
+7. 执行硬过滤：
+   - 若 `params_b` 可明确解析或可被保守推断，且 `< 10`，则直接过滤
+  - 若 `params_b` 可明确解析或可被保守推断，且 `>= 10`，则正常保留
+  - 若参数量无法可靠判断，则保留条目并标注 `field_missing: true`（参数未知不做惩罚性淘汰）
+   - `release_year >= 2025`
+   - `tool_support_flag === true`
+   - 若同时存在 `input_context_limit` 与 `output_context_limit`，则必须满足 `input_context_limit >= 100000` 且 `output_context_limit >= 10000`
+   - 若上下文字段缺失，保留条目但标注 `field_missing: true`
+8. 执行分层与排序：
+  - 先按家族分层：`Tier A`（已验证主流家族）与 `Tier B`（其余模型）
+  - 层内按三字段排序：`context能力`、`release_month`、`params_b(可用时)`
+9. 原子写入新字典文件，更新 `updated_at`、`tier`、`rank`。
+10. 若任一步失败，保留旧字典并记录错误。
 
-- `research.md`
-- 其他 provider / fallback 核心路由
+### 1.4 接口定义
 
-本次只解决 OpenClaw 配置写入语义不完整的问题，不扩展成通用配置编辑器。
-
----
-
-## 方案设计
-
-### 一、把配置动作拆成两种模式
-
-后端不再用语义模糊的“mergeConfig”表达单一行为，而是改成基于模式写入：
-
-- `default`：设为默认模型
-- `fallback`：设为备用模型
-
-建议保留一个统一入口函数：
-
+#### 内部更新入口
 ```ts
-type OpenClawModelMode = 'default' | 'fallback';
-
-async function configureOpenClawModel(mode: OpenClawModelMode): Promise<ConfigureResult> {
-  // 读取配置
-  // 备份
-  // 注入 free-proxy provider
-  // 注入 agents.defaults.models['free-proxy/auto']
-  // 按 mode 修改 primary 或 fallbacks
-  // 写回文件
+type ModelDictionaryEntry = {
+  id: string
+  name: string
+  tier: 'A' | 'B'
+  params_b: number | null
+  input_context_limit: number | null
+  output_context_limit: number | null
+  release_year: number | null
+  release_at?: string | null
+  license?: string | null
+  url?: string | null
+  tags: string[]
+  source: 'models.dev'
+  tool_support_flag: boolean
+  field_missing?: boolean
+  rank: number
+  updated_at: string
+  raw: unknown
 }
+
+type ModelDictionaryFile = {
+  updated_at: string
+  models: ModelDictionaryEntry[]
+}
+
+async function updateModelsDictionary(): Promise<{
+  success: boolean
+  updated: boolean
+  path: string
+  count?: number
+  error?: string
+}>
 ```
 
-这样最简单，避免复制两套大段 JSON merge 逻辑。
-
----
-
-### 二、统一确保基础结构存在
-
-无论点哪个按钮，都先确保以下结构存在：
-
-```json
-{
-  "models": {
-    "providers": {
-      "free-proxy": {
-        "baseUrl": "http://localhost:8765/v1",
-        "apiKey": "any_string",
-        "api": "openai-completions",
-        "models": [{ "id": "auto", "name": "auto" }]
-      }
-    }
-  },
-  "agents": {
-    "defaults": {
-      "models": {
-        "free-proxy/auto": {}
-      }
-    }
-  }
-}
-```
-
-这里要注意两个点：
-
-1. `free-proxy/auto` 是 agent 引用模型名
-2. provider 内部 `models` 里的 `id` 仍然是 `auto`
-
-即：
-
-- provider 注册层：`free-proxy + auto`
-- agent 选择层：`free-proxy/auto`
-
----
-
-### 三、默认模型按钮的写入逻辑
-
-点击“设为 OpenClaw 默认模型”时，目标是强制把 OpenClaw 默认模型切成我们的模型。
-
-#### 写入规则
-
-1. 确保 `agents.defaults.model` 存在
-2. 将 `agents.defaults.model.primary` 直接设为 `free-proxy/auto`
-3. 不强制改写用户现有 `fallbacks`
-4. 但如果 `fallbacks` 不存在，允许保持为空，不做额外扩展
-
-建议逻辑：
-
+#### 服务侧加载入口
 ```ts
-const targetModel = 'free-proxy/auto';
-
-if (!config.agents.defaults.model || typeof config.agents.defaults.model === 'string') {
-  config.agents.defaults.model = {};
-}
-
-config.agents.defaults.model.primary = targetModel;
+async function loadModelDictionary(): Promise<ModelDictionaryFile | null>
+async function triggerBackgroundDictionaryUpdate(): Promise<void>
 ```
 
-#### 为什么不顺手覆盖 `fallbacks`
+## 2. Core Snippets
 
-因为“设默认模型”是强动作；但用户原来已有备用链时，不应该被我们顺带清空或重排。
-
-本次遵循最小有效剂量：
-
-- 只解决“默认模型不生效”
-- 不篡改用户原有备用链
-
----
-
-### 四、备用模型按钮的写入逻辑
-
-点击“设为 OpenClaw 备用模型”时，要分两种情况。
-
-#### 情况 A：用户没有 `agents.defaults.model`
-
-只增加：
-
-- `models.providers.free-proxy`
-- `agents.defaults.models['free-proxy/auto']`
-
-不创建 `primary`
-不创建 `fallbacks`
-
-原因：
-
-- 用户没有配置默认模型时，说明他可能还没建立自己的主模型策略
-- 这时如果我们擅自创建 `fallbacks`，语义不完整，因为没有明确 primary
-- 你要求的也是：没有 defaults 时，只增加 models 和 agent 里的 models
-
-这里我会严格按你的产品规则执行。
-
-#### 情况 B：用户已有 `agents.defaults.model`
-
-把我们的模型加入 `fallbacks`：
-
-1. 如果 `model` 是字符串，需要先标准化成对象
-2. 保留原有 primary
-3. 在 `fallbacks` 末尾追加 `free-proxy/auto`
-4. 去重，避免重复追加
-
-关键逻辑：
-
-```ts
-const targetModel = 'free-proxy/auto';
-const modelConfig = config.agents.defaults.model;
-
-if (typeof modelConfig === 'string') {
-  config.agents.defaults.model = {
-    primary: modelConfig,
-    fallbacks: [targetModel]
-  };
-} else {
-  const fallbacks = Array.isArray(modelConfig.fallbacks) ? modelConfig.fallbacks : [];
-  config.agents.defaults.model.fallbacks = [...new Set([...fallbacks, targetModel])];
-}
-```
-
-#### 关键判断
-
-“用户配置文件里面没有 defaults” 这里建议代码层拆成更精确的 2 层：
-
-1. 没有 `agents.defaults`
-2. 有 `agents.defaults`，但没有 `agents.defaults.model`
-
-你的产品语义本质上是：
-
-- 没有主模型链时，不主动替用户建 fallback 链
-- 只有已有主模型链时，才把我们追加成备用模型
-
-所以判断条件最好落在 `agents.defaults.model` 是否存在，而不是仅判断 `defaults`。
-
----
-
-## 数据结构兼容策略
-
-### 1. `agents.defaults.model` 可能是字符串
-
-OpenClaw 允许：
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": "openai/gpt-4.1"
-    }
-  }
-}
-```
-
-如果要追加 fallback，必须先转成对象：
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "openai/gpt-4.1",
-        "fallbacks": ["free-proxy/auto"]
-      }
-    }
-  }
-}
-```
-
-这是本次最关键的兼容点。
-
-### 2. `fallbacks` 必须去重
-
-用户可能已经点过一次“设为备用模型”，不能无限追加重复项。
-
-### 3. 非法 JSON 仍然直接报错
-
-现有策略正确：若配置文件存在但 JSON 非法，直接返回错误，不进行覆盖写入。
-
-### 4. 继续保留备份机制
-
-每次改写前继续生成 `openclaw.bakN`。
-
-这个不能删，因为本次改动会真正触碰用户默认模型。
-
----
-
-## 后端改造计划
-
-### 1) `src/openclaw-config.ts`
-
-#### 目标
-
-把现有 `mergeConfig()` 改成“带模式写入”的配置函数。
-
-#### 建议重构点
-
-新增小函数，减少主函数复杂度：
-
-```ts
-type OpenClawModelMode = 'default' | 'fallback';
-
-function ensureBaseConfig(config: Record<string, unknown>): MutableOpenClawConfig
-function ensureFreeProxyProvider(config: MutableOpenClawConfig): void
-function ensureAgentModelEntry(config: MutableOpenClawConfig): void
-function applyDefaultModel(config: MutableOpenClawConfig): void
-function applyFallbackModel(config: MutableOpenClawConfig): void
-```
-
-#### 主流程伪代码
-
-```ts
-export async function configureOpenClawModel(mode: OpenClawModelMode): Promise<ConfigureResult> {
-  const status = await detectOpenClawConfig();
-  if (status.exists && !status.isValid) {
-    return { success: false, error: 'Invalid JSON' };
-  }
-
-  const existingConfig = status.exists ? clone(status.content) : {};
-  const config = ensureBaseConfig(existingConfig);
-
-  const backup = createBackupIfNeeded(status.exists);
-
-  ensureFreeProxyProvider(config);
-  ensureAgentModelEntry(config);
-
-  if (mode === 'default') {
-    applyDefaultModel(config);
-  } else {
-    applyFallbackModel(config);
-  }
-
-  writeConfig(config);
-  return { success: true, backup };
-}
-```
-
----
-
-### 2) `src/server.ts`
-
-#### 目标
-
-把现有单接口改成模式化接口。
-
-#### 推荐接口方案
-
-继续保留一个接口，前端传 mode：
-
-```ts
-app.post('/api/configure-openclaw', async (c) => {
-  const { mode } = await c.req.json();
-  // mode: 'default' | 'fallback'
-});
-```
-
-原因：
-
-- 改动最小
-- 现有前端接法最好迁移
-- 不需要新增两条几乎重复的路由
-
-#### 入参校验
-
-```ts
-if (mode !== 'default' && mode !== 'fallback') {
-  return c.json({ success: false, error: 'Invalid mode' }, 400);
-}
-```
-
-#### 成功文案建议区分
-
-- `default` -> `已设为 OpenClaw 默认模型`
-- `fallback` -> `已加入 OpenClaw 备用模型`
-
-这样小白能直接看懂“到底改了什么”。
-
----
-
-## 前端改造计划
-
-### 1) `public/index.html` 的按钮文案
-
-当前只有一个按钮：
-
-- `更新 OpenClaw 配置`
-
-改成两个按钮：
-
-- `设为 OpenClaw 默认模型`
-- `设为 OpenClaw 备用模型`
-
-未检测到配置文件时也可以显示这两个按钮；后端会负责创建配置文件。
-
-#### 推荐渲染
-
+### 2.1 抓取 + 标准化伪代码
 ```js
-actionsEl.innerHTML = `
-  <button class="btn btn-primary" onclick="configureOpenClaw('default', event)">设为 OpenClaw 默认模型</button>
-  <button class="btn btn-secondary" onclick="configureOpenClaw('fallback', event)">设为 OpenClaw 备用模型</button>
-`;
+async function fetchModelsDevWithRetry() {
+  const delays = [1000, 2000, 4000]
+
+  for (let i = 0; i < delays.length; i += 1) {
+    try {
+      const res = await fetch(MODELS_DEV_URL, { signal: AbortSignal.timeout(10000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await parseModelsDevResponse(res)
+    } catch (error) {
+      if (i === delays.length - 1) throw error
+      await sleep(delays[i])
+    }
+  }
+}
+
+function normalizeEntry(rawItem) {
+  return {
+    id: buildCompositeId(rawItem.provider_id, rawItem.model_id),
+    name: rawItem.name || rawItem.model_id,
+    params_b: normalizeParamsToB(rawItem.parameters, rawItem.model_id, rawItem.name),
+    input_context_limit: normalizeNumber(rawItem.input_context_limit),
+    output_context_limit: normalizeNumber(rawItem.output_context_limit),
+    release_year: normalizeReleaseYear(rawItem.release_date),
+    release_at: normalizeReleaseAt(rawItem.release_date),
+    license: rawItem.license || null,
+    url: rawItem.url || null,
+    tags: normalizeTags(rawItem.tags),
+    source: 'models.dev',
+    tool_support_flag: detectToolSupport(rawItem),
+    raw: rawItem
+  }
+}
 ```
 
-### 2) 前端调用参数
-
+### 2.2 过滤逻辑伪代码
 ```js
-await fetch('/api/configure-openclaw', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ mode })
-});
+function applyHardRules(entry) {
+  if (entry.params_b != null && entry.params_b < 10) return { keep: false }
+  if (entry.release_year == null || entry.release_year < 2025) return { keep: false }
+  if (!entry.tool_support_flag) return { keep: false }
+
+  const hasContext =
+    typeof entry.input_context_limit === 'number' &&
+    typeof entry.output_context_limit === 'number'
+
+  if (!hasContext) {
+    return {
+      keep: true,
+      field_missing: true
+    }
+  }
+
+  if (entry.input_context_limit < 100000) return { keep: false }
+  if (entry.output_context_limit < 10000) return { keep: false }
+
+  return { keep: true, field_missing: false }
+}
 ```
 
-### 3) toast 文案区分
+### 2.3 分层排序伪代码
+```js
+const TIER_A_FAMILIES = [
+  'gpt',
+  'claude',
+  'gemini',
+  'deepseek',
+  'minimax',
+  'kimi',
+  'glm',
+  'mimo',
+  'step'
 
-根据 mode 区分：
+]
 
-- 默认模型：`已把 free-proxy/auto 设为 OpenClaw 默认模型`
-- 备用模型：`已把 free-proxy/auto 加入 OpenClaw 备用模型`
-
-这样可以直接消除“到底有没有生效”的歧义。
-
-### 4) 页面辅助说明同步更新
-
-当前页面只提示：
-
-```text
-在 OpenClaw 中使用：/model free-proxy/auto
-```
-
-建议补一行轻提示：
-
-- 默认模型按钮：会修改 OpenClaw 的默认模型
-- 备用模型按钮：只会把它加入备用链，不会覆盖你现在的主模型
-
-这是小白最需要的心理预期。
-
----
-
-## 关键代码草案
-
-### 1. 常量
-
-```ts
-const FREE_PROXY_PROVIDER_ID = 'free-proxy';
-const FREE_PROXY_MODEL_ID = 'auto';
-const FREE_PROXY_AGENT_MODEL = 'free-proxy/auto';
-```
-
-### 2. provider 注入
-
-```ts
-config.models.providers[FREE_PROXY_PROVIDER_ID] = {
-  baseUrl,
-  apiKey: 'any_string',
-  api: 'openai-completions',
-  models: [{ id: FREE_PROXY_MODEL_ID, name: FREE_PROXY_MODEL_ID }]
-};
-```
-
-### 3. agent allowlist 注入
-
-```ts
-config.agents.defaults.models[FREE_PROXY_AGENT_MODEL] =
-  config.agents.defaults.models[FREE_PROXY_AGENT_MODEL] || {};
-```
-
-### 4. 默认模型写入
-
-```ts
-if (!isPlainObject(config.agents.defaults.model)) {
-  config.agents.defaults.model = {};
+const FAMILY_ALIAS = {
+  'gpt-5': 'gpt',
+  'chatgpt': 'gpt',
+  'MiniMax': 'minimax',
+  'moonshot': 'kimi',
+  'kimi-k2': 'kimi'
 }
 
-config.agents.defaults.model.primary = FREE_PROXY_AGENT_MODEL;
-```
+const TIER_A_FAMILY_SET = new Set(
+  TIER_A_FAMILIES.map((x) => x.toLowerCase())
+)
 
-### 5. 备用模型写入
-
-```ts
-const modelConfig = config.agents.defaults.model;
-
-if (!modelConfig) {
-  return;
+function normalizeFamily(value) {
+  return String(value || '').trim().toLowerCase()
 }
 
-if (typeof modelConfig === 'string') {
-  config.agents.defaults.model = {
-    primary: modelConfig,
-    fallbacks: [FREE_PROXY_AGENT_MODEL]
-  };
-  return;
+function detectFamily(entry) {
+  const baseFamily = normalizeFamily(entry.family)
+  if (baseFamily) {
+    const alias = normalizeFamily(FAMILY_ALIAS[baseFamily] || baseFamily)
+    if (alias) return alias
+  }
+
+  // family 缺失时，从 id/name 做保守识别；统一小写后匹配，避免大小写导致漏识别
+  const haystack = `${entry.id || ''} ${entry.name || ''}`.toLowerCase()
+  if (haystack.includes('minimax')) return 'minimax'
+  if (haystack.includes('gpt')) return 'gpt'
+  if (haystack.includes('claude')) return 'claude'
+  if (haystack.includes('gemini')) return 'gemini'
+  if (haystack.includes('deepseek')) return 'deepseek'
+  if (haystack.includes('kimi') || haystack.includes('moonshot')) return 'kimi'
+  if (haystack.includes('glm')) return 'glm'
+  if (haystack.includes('mimo')) return 'mimo'
+  if (haystack.includes('step')) return 'step'
+
+  return ''
 }
 
-const existingFallbacks = Array.isArray(modelConfig.fallbacks)
-  ? modelConfig.fallbacks.filter((item): item is string => typeof item === 'string')
-  : [];
+function buildTier(entry) {
+  const family = detectFamily(entry)
+  return TIER_A_FAMILY_SET.has(family) ? 'A' : 'B'
+}
 
-config.agents.defaults.model.fallbacks = [...new Set([...existingFallbacks, FREE_PROXY_AGENT_MODEL])];
+function computeContextScore(entry) {
+  if (entry.input_context_limit == null || entry.output_context_limit == null) return 0
+  return entry.input_context_limit + entry.output_context_limit
+}
+
+function sortEntries(entries) {
+  return [...entries].sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier === 'A' ? -1 : 1
+
+    const ctxDiff = computeContextScore(b) - computeContextScore(a)
+    if (ctxDiff !== 0) return ctxDiff
+
+    const monthA = toReleaseMonthIndex(a.release_at, a.release_year)
+    const monthB = toReleaseMonthIndex(b.release_at, b.release_year)
+    if (monthA !== monthB) return monthB - monthA
+
+    // 参数仅在可解析时用于打破平局；未知参数不惩罚
+    return (b.params_b ?? -1) - (a.params_b ?? -1)
+  })
+}
 ```
 
----
+### 2.4 策略细则（简化版）
+- 2026-03-24 快速 demo 结论：基于 `https://models.dev/api.json` 实测 `3876` 条模型里，`parameters/weights/size` 等显式参数字段命中率约 `0%`，仅靠名称正则可推断约 `29.10%`，其余约 `70.90%` 无法可靠判定；`minimax` 与 `gpt-5-mini` 样本均未拿到可用参数。
+- 因此 v1 采用简化策略：
+  1. 只对“明确小模型（<10B）”做硬过滤；参数未知保留。
+  2. 先做家族分层（Tier A/Tier B），不做复杂大权重打分。
+  3. 层内仅按 `context`、`release_month`、`params_b(可用时)` 排序。
+- 不采用“硬编码具体模型名直接给高分”的策略；最多允许维护一个很小的显式小模型拒绝名单，仅用于已知误判案例。
 
-## 测试计划
+### 2.5 原子写入伪代码
+```js
+async function writeDictionaryAtomically(file) {
+  const targetPath = 'data/models.dev.json'
+  const tmpPath = `${targetPath}.tmp`
+  const backupPath = `${targetPath}.bak.${Date.now()}`
 
-`__tests__/openclaw-config.test.ts` 至少补以下场景。
+  if (await exists(targetPath)) {
+    await copyFile(targetPath, backupPath)
+  }
 
-### 必测
+  await writeFile(tmpPath, JSON.stringify(file, null, 2))
+  await rename(tmpPath, targetPath)
+}
+```
 
-1. 空配置文件下，`default` 模式会创建：
-   - `models.providers.free-proxy`
-   - `agents.defaults.models['free-proxy/auto']`
-   - `agents.defaults.model.primary === 'free-proxy/auto'`
+## 3. Implementation Details
 
-2. 空配置文件下，`fallback` 模式只创建：
-   - `models.providers.free-proxy`
-   - `agents.defaults.models['free-proxy/auto']`
-   - 不创建 `agents.defaults.model.primary`
-   - 不创建 `agents.defaults.model.fallbacks`
+### 3.1 新增文件
+- `scripts/update-models.js`
+  - 调度入口。
+  - 负责抓取、解析、过滤、分层排序、写盘。
+- `src/model-dictionary.ts`
+  - 负责加载本地字典、缓存、后台更新入口。
+- `__tests__/model-dictionary.test.ts`
+  - 覆盖解析、过滤、分层排序、回退逻辑。
+- `data/models.dev.json`
+  - 初始样本或首次生成结果。
 
-3. 已有 `agents.defaults.model.primary` 时，`fallback` 模式会把 `free-proxy/auto` 追加到 `fallbacks`
+### 3.2 修改文件
+- `package.json`
+  - 增加脚本：`update-models`。
+- `src/server.ts`
+  - 启动时调用本地字典加载。
+  - 在不阻塞启动的前提下触发后台更新。
+- `src/fallback.ts` 或当前模型筛选入口文件
+  - 将模型候选来源切换为本地字典优先。
+  - 确保展示与实际使用的候选集一致。
 
-4. 已有字符串形式 `agents.defaults.model = 'openrouter/auto:free'` 时，`fallback` 模式会自动转成对象结构
-
-5. 连续执行两次 `fallback` 模式不会重复写入 `free-proxy/auto`
-
-6. 已存在非法 JSON 时返回失败，不覆盖原文件
-
-7. 配置文件存在时仍会创建备份
-
-### 可选补测
-
-1. 默认模式不会清空已有 `fallbacks`
-2. 默认模式会覆盖已有 `primary`
-
----
-
-## 风险点与处理
-
-### 风险 1：误判备用模型写入条件
-
-如果只按“有没有 defaults”判断，会误伤这种情况：
-
+### 3.3 建议脚本定义
 ```json
 {
-  "agents": {
-    "defaults": {
-      "models": {}
-    }
+  "scripts": {
+    "update-models": "node scripts/update-models.js"
   }
 }
 ```
 
-这里有 defaults，但没有 model 主链。按你的产品规则，不应强行创建 fallback 链。
-
-处理：判断 `agents.defaults.model` 是否存在，而不是只看 `defaults`。
-
-### 风险 2：覆盖用户原有模型链
-
-处理：
-
-- `default` 模式只改 `primary`
-- `fallback` 模式只追加 `fallbacks`
-- 不清空用户已有内容
-
-### 风险 3：重复追加 fallback
-
-处理：`Set` 去重。
-
-### 风险 4：用户以为“备用模型”会立即生效
-
-处理：前端文案明确写“不会覆盖当前主模型”。
-
----
-
-## 验收标准
-
-### 默认模型按钮
-
-点击后，`openclaw.json` 至少满足：
-
+### 3.4 字典文件结构
 ```json
 {
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "free-proxy/auto"
-      }
+  "updated_at": "2026-03-24T00:00:00.000Z",
+  "models": [
+    {
+      "id": "provider/model",
+      "name": "Model Name",
+      "params_b": 70,
+      "input_context_limit": 128000,
+      "output_context_limit": 16000,
+      "release_year": 2025,
+      "license": "apache-2.0",
+      "url": "https://models.dev/...",
+      "tags": ["tool-call"],
+      "source": "models.dev",
+      "tier": "A",
+      "tool_support_flag": true,
+      "field_missing": false,
+      "rank": 1,
+      "updated_at": "2026-03-24T00:00:00.000Z",
+      "raw": {}
     }
-  }
+  ]
 }
 ```
 
-### 备用模型按钮
+## 4. Edge Cases & Error Handling
 
-#### 若原本没有 `agents.defaults.model`
+### 4.1 网络失败
+- 请求超时：单次 10s。
+- 重试：3 次，延迟 1s / 2s / 4s。
+- 最终失败：不覆盖旧文件，只记录错误日志。
 
-不会擅自创建 `primary/fallbacks`，只完成 provider 和 allowlist 注入。
+### 4.2 models.dev 数据结构变化
+- 若 API/页面结构变化导致解析失败：
+  - 记录解析错误。
+  - 返回更新失败。
+  - 保留旧字典。
+- 抓取策略分两层：
+  - 第一层：优先使用普通 HTTP 抓取/解析，保证 `npm start` 的后台更新足够轻；
+  - 第二层：如果页面变成强依赖前端渲染、普通抓取长期失效，则不在服务启动时引入浏览器抓取，而是改为“发布阶段或管理员手动执行 Playwright/无头浏览器脚本，生成本地快照” 的离线更新模式。
+- 浏览器抓取只作为兜底更新方案，不进入日常启动链路。
 
-#### 若原本已有 `agents.defaults.model`
+### 4.3 条目字段缺失
+- 缺发布日期、tool 支持：直接淘汰。
+- 缺参数：不直接淘汰，按“参数未知保留”处理。
+- 缺 `input_context_limit` 或 `output_context_limit`：
+  - 条目保留。
+  - `field_missing: true`。
+  - 层内排序时 `context` 按 `0` 处理。
+- 缺参数量且无法从模型名保守推断：
+  - 条目保留。
+  - `field_missing: true`。
+  - 层内排序时参数只用于平局，不做惩罚性降权。
+  - 只有在参数量被明确识别为 `< 10B` 时才过滤，不因为“未知”直接过滤。
 
-会得到：
+### 4.4 数据为空
+- 若抓取结果为空或过滤后为空：
+  - 判定为异常更新。
+  - 不写空文件覆盖旧文件。
+  - 日志记录 `empty_result`。
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "原来的模型",
-        "fallbacks": ["...原有内容...", "free-proxy/auto"]
-      }
-    }
-  }
-}
-```
+### 4.5 重复模型
+- 唯一键使用 `provider_id + model_id`。
+- 若存在重复项：保留信息更完整的一条；若完整度相同，保留最新抓取的一条。
 
-### UI
+### 4.6 文件写入异常
+- 使用临时文件 + rename 保证原子写入。
+- 写入失败时清理 `.tmp` 文件。
+- 旧文件保持不变。
 
-- 页面显示两个按钮，而不是一个模糊按钮
-- 成功提示能明确区分“默认模型”还是“备用模型”
-- 备份功能继续有效
+### 4.7 排序异常
+- 若原始字段是字符串但无法映射成数字：
+  - `parameters` / `release_date` 解析失败：直接淘汰；
+  - `input_context_limit` / `output_context_limit` 解析失败：标注 `field_missing: true`，并按 `0` 参与层内排序。
+- 若字段都相同导致排序平局：
+  - 按 `provider_id + model_id` 进行稳定字典序排序，保证结果可复现。
 
----
+## 5. Verification Plan
 
-## 推荐实施顺序
+### 5.1 命令验证
+- 生成字典：`npm run update-models`
+- 单元测试：`npm test`
+- 类型检查：`npx tsc --noEmit`
+- 启动服务：`npm start`
 
-1. 先重构 `src/openclaw-config.ts` 的配置写入函数
-2. 再改 `src/server.ts` 接口入参和成功文案
-3. 再改 `public/index.html` 按钮和提示文案
-4. 最后补 `__tests__/openclaw-config.test.ts`
+### 5.2 验证点
+- `data/models.dev.json` 存在。
+- 文件中所有条目包含 `spec.md` 要求字段。
+- 过滤规则符合：
+  - 已明确识别为小于 10B 的模型不存在。
+  - 参数未知但其他条件合格的模型会被保留，并带 `field_missing: true`。
+  - 非 2025+ 模型不存在。
+  - 不支持 tool call 的模型不存在。
+- 缺上下文字段的条目带 `field_missing: true`。
+- 排序结果先按 `tier(A->B)`，再按 `context`、`release_month`、`params_b(可用时)`，且 `rank` 连续。
+- 参数未知条目不会因为缺参数被直接排到末尾。
+- 使用字符串输入样本时，`params_b`、`input_context_limit`、`output_context_limit`、`release_year` 都能被稳定映射到数字或触发预期降级。
+- 服务启动时即使更新失败也能正常启动。
 
-这个顺序风险最低，因为核心逻辑先固定，前端只做薄调用。
+## 6. PM Review Note
+
+给产品经理的大白话：
+
+- 这套方案先把 `models.dev` 变成你能离线用的本地字典，所以用户选模型时不需要每次都在线扫一遍。
+- 它先按你定死的门槛把明显不该展示的小模型、老模型、没 tool call 的模型砍掉。
+- 上下文能力只认 `input_context_limit` 和 `output_context_limit` 这两个明确字段，避免再被模糊字段带偏。
+- 真正排序时，不走复杂大权重公式，而是“家族分层 + 三字段排序”，更易维护也更稳定。
+- 启动时先读旧字典，后台再更新，所以不会把服务卡住；更新失败也不会把现有可用数据冲掉。
+- 这样 `spec.md` 里的 5 条验收标准都被一一落地了：文件结构、过滤规则、可复现排序、启动容错、可审计字段，全都有对应实现点和验证方法。
+
+## 7. Atomic Todo List
+
+- [x] 1. 环境/配置准备：确认 `spec.md` 为唯一需求源并锁定输出路径为 `data/models.dev.json`
+- [x] 1. 环境/配置准备：在 `package.json` 增加 `update-models` 脚本定义
+- [x] 1. 环境/配置准备：创建 `data/` 目录并约定备份文件命名规则
+- [x] 2. 核心逻辑开发：新增 `scripts/update-models.js` 抓取 `models.dev` 原始数据
+- [x] 2. 核心逻辑开发：实现原始数据解析与标准字段归一化
+- [x] 2. 核心逻辑开发：实现 `provider_id+model_id` 复合唯一键生成逻辑
+- [x] 2. 核心逻辑开发：实现参数 / 发布时间 / tool 支持硬过滤逻辑
+- [x] 2. 核心逻辑开发：实现参数字段缺失时的保守推断逻辑与已知小模型拒绝名单机制
+- [x] 2. 核心逻辑开发：实现家族识别与 `tier(A/B)` 分层逻辑（小规模 alias 表）
+- [x] 2. 核心逻辑开发：实现层内三字段排序（context、release_month、params_b可用时）
+- [x] 2. 核心逻辑开发：实现参数未知中性处理与稳定平局规则
+- [x] 2. 核心逻辑开发：实现 `raw`、`tier`、`updated_at`、`rank` 字段写入逻辑
+- [x] 2. 核心逻辑开发：实现原子写入与备份回滚逻辑
+- [x] 2. 核心逻辑开发：实现 3 次重试、10 秒超时、失败保留旧文件逻辑
+- [x] 3. 接口/UI 适配：新增 `src/model-dictionary.ts` 封装本地字典加载接口
+- [x] 3. 接口/UI 适配：在 `src/server.ts` 启动流程中接入本地字典加载与后台异步更新
+- [x] 3. 接口/UI 适配：将模型候选读取逻辑切换为本地字典优先
+- [x] 4. 测试验证：新增 `__tests__/model-dictionary.test.ts` 覆盖解析与硬过滤逻辑
+- [x] 4. 测试验证：新增测试覆盖 tier 分层、层内排序、稳定平局与 `rank` 连续编号
+- [x] 4. 测试验证：新增测试覆盖参数未知保留、明确小模型过滤逻辑
+- [x] 4. 测试验证：新增测试覆盖网络失败、空结果、写入失败回退逻辑
+- [x] 4. 测试验证：运行 `npm run update-models` 并检查 `data/models.dev.json` 输出结构
+- [x] 4. 测试验证：运行 `npm test`、`npx tsc --noEmit`、`npm start`
+- [x] 5. 临时文件清理：清理更新过程产生的 `.tmp` 文件并保留必要备份
+
+## 8. Revision Log
+
+- 策略收敛为“硬过滤 + 家族分层 + 三字段排序”，移除复杂加权评分与归一化计算。
+- 基于 `models.dev/api.json` 快速 demo 实测，确认参数字段缺失占比高，采用“参数未知保留、仅明确小模型过滤”的生产策略。
+- 补充 Tier A/Tier B 与稳定排序规则，确保结果可解释、可复现、低维护成本。
