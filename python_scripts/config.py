@@ -1,42 +1,17 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+from .provider_catalog import PROVIDER_MAP, PROVIDERS, ProviderMeta
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DOTENV_PATH = ROOT_DIR / '.env'
 
-
-@dataclass(frozen=True)
-class ProviderSpec:
-    name: str
-    base_url: str
-    api_key_env: str
-    format: str
-
-
-PROVIDER_SPECS: tuple[ProviderSpec, ...] = (
-    ProviderSpec('openrouter', 'https://openrouter.ai/api/v1', 'OPENROUTER_API_KEY', 'openai'),
-    ProviderSpec('groq', 'https://api.groq.com/openai/v1', 'GROQ_API_KEY', 'openai'),
-    ProviderSpec('opencode', 'https://opencode.ai/zen/v1', 'OPENCODE_API_KEY', 'openai'),
-    ProviderSpec('gemini', 'https://generativelanguage.googleapis.com/v1beta', 'GEMINI_API_KEY', 'gemini'),
-    ProviderSpec('github', 'https://models.github.ai/inference', 'GITHUB_MODELS_API_KEY', 'openai'),
-    ProviderSpec('mistral', 'https://api.mistral.ai/v1', 'MISTRAL_API_KEY', 'openai'),
-    ProviderSpec('cerebras', 'https://api.cerebras.ai/v1', 'CEREBRAS_API_KEY', 'openai'),
-    ProviderSpec('sambanova', 'https://api.sambanova.ai/v1', 'SAMBANOVA_API_KEY', 'openai'),
-)
-
-PROVIDER_MODEL_HINTS: dict[str, list[str]] = {
-    'github': ['gpt-4o-mini', 'gpt-4o', 'DeepSeek-V3-0324', 'Llama-3.3-70B-Instruct'],
-    'cerebras': ['gpt-oss-120b', 'llama-3.1-8b'],
-}
-
-PROVIDER_REQUIRED_QUERY: dict[str, dict[str, str]] = {
-    'github': {'api-version': '2024-12-01-preview'},
-}
+ProviderSpec = ProviderMeta
+PROVIDER_SPECS: tuple[ProviderSpec, ...] = PROVIDERS
 
 
 def load_dotenv(path: Path = DOTENV_PATH) -> dict[str, str]:
@@ -69,10 +44,10 @@ def get_provider_specs() -> tuple[ProviderSpec, ...]:
 
 
 def get_provider_spec(name: str) -> ProviderSpec:
-    for spec in PROVIDER_SPECS:
-        if spec.name == name:
-            return spec
-    raise KeyError(f'unknown provider: {name}')
+    spec = PROVIDER_MAP.get(name)
+    if spec is None:
+        raise KeyError(f'unknown provider: {name}')
+    return spec
 
 
 def configured_provider_names(env: dict[str, str] | None = None) -> list[str]:
@@ -88,7 +63,7 @@ def iter_provider_specs(names: Iterable[str] | None = None) -> list[ProviderSpec
 
 
 def get_provider_model_hints(name: str) -> list[str]:
-    return PROVIDER_MODEL_HINTS.get(name, [])
+    return list(get_provider_spec(name).model_hints)
 
 
 def get_probe_model_candidates(name: str, requested_model: str | None = None) -> list[str]:
@@ -102,4 +77,4 @@ def get_probe_model_candidates(name: str, requested_model: str | None = None) ->
 
 
 def get_provider_required_query(name: str) -> dict[str, str]:
-    return PROVIDER_REQUIRED_QUERY.get(name, {})
+    return dict(get_provider_spec(name).required_query)

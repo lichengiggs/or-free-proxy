@@ -1,0 +1,1484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>free-proxy Python 控制台</title>
+    <style>
+        :root {
+            --bg: #f6f7f3;
+            --panel: #fffdfa;
+            --panel-strong: #ffffff;
+            --text: #182018;
+            --muted: #667163;
+            --line: #dde5d7;
+            --primary: #1e6a52;
+            --primary-strong: #174f3d;
+            --accent: #d5843f;
+            --danger: #b9483e;
+            --success-bg: #e4f5ea;
+            --error-bg: #fdeaea;
+            --info-bg: #ebf3ff;
+            --shadow: 0 16px 40px rgba(40, 54, 37, 0.08);
+            --radius: 18px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(213, 132, 63, 0.12), transparent 28%),
+                radial-gradient(circle at top right, rgba(30, 106, 82, 0.14), transparent 26%),
+                linear-gradient(180deg, #fbfcf8 0%, var(--bg) 100%);
+            min-height: 100vh;
+        }
+
+        .shell {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .hero {
+            padding: 24px;
+            border-radius: 24px;
+            background: linear-gradient(135deg, rgba(24, 79, 61, 0.96), rgba(50, 101, 74, 0.92));
+            color: #f8faf8;
+            box-shadow: var(--shadow);
+            margin-bottom: 18px;
+        }
+
+        .hero-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .hero h1 {
+            margin: 0 0 8px;
+            font-size: 32px;
+            letter-spacing: -0.03em;
+        }
+
+        .hero p {
+            margin: 0;
+            max-width: 680px;
+            color: rgba(248, 250, 248, 0.84);
+            line-height: 1.6;
+        }
+
+        .hero-stats {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+
+        .stat {
+            min-width: 150px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(6px);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: rgba(248, 250, 248, 0.72);
+            margin-bottom: 6px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .page-flow {
+            display: grid;
+            gap: 18px;
+        }
+
+        .workbench {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr;
+            gap: 18px;
+        }
+
+        .workbench-side {
+            display: grid;
+            gap: 18px;
+        }
+
+        .card {
+            background: rgba(255, 253, 250, 0.92);
+            border: 1px solid rgba(221, 229, 215, 0.9);
+            border-radius: var(--radius);
+            padding: 20px;
+            box-shadow: var(--shadow);
+        }
+
+        .card h2 {
+            margin: 0;
+            font-size: 18px;
+            letter-spacing: -0.02em;
+        }
+
+        .card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .subtle {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .provider-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+        }
+
+        .provider-card {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 14px;
+            background: var(--panel-strong);
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        }
+
+        .provider-card:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 22px rgba(21, 39, 31, 0.06);
+        }
+
+        .provider-card.configured {
+            border-color: rgba(30, 106, 82, 0.32);
+        }
+
+        .provider-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: flex-start;
+            margin-bottom: 10px;
+        }
+
+        .provider-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .provider-name {
+            font-weight: 700;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge.free {
+            background: #e4f5ea;
+            color: #176347;
+        }
+
+        .badge.partial {
+            background: #fff1e2;
+            color: #9a581f;
+        }
+
+        .provider-state {
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .provider-state.ok {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .provider-actions {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .masked {
+            min-height: 40px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: #f2f5ef;
+            color: #305445;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+        }
+
+        .provider-help {
+            font-size: 12px;
+            margin-top: 10px;
+            color: var(--muted);
+        }
+
+        .provider-help a {
+            color: inherit;
+        }
+
+        .provider-note {
+            margin-top: 10px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--muted);
+        }
+
+        .provider-note strong {
+            color: var(--text);
+        }
+
+        .field,
+        .select,
+        .textarea {
+            width: 100%;
+            border: 1px solid #cfd9c8;
+            border-radius: 12px;
+            padding: 11px 12px;
+            background: #fff;
+            color: var(--text);
+            font: inherit;
+        }
+
+        .field:focus,
+        .select:focus,
+        .textarea:focus {
+            outline: none;
+            border-color: rgba(30, 106, 82, 0.7);
+            box-shadow: 0 0 0 4px rgba(30, 106, 82, 0.12);
+        }
+
+        .textarea {
+            min-height: 140px;
+            resize: vertical;
+            line-height: 1.6;
+        }
+
+        .btn {
+            border: 0;
+            border-radius: 12px;
+            padding: 10px 14px;
+            font: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-strong);
+        }
+
+        .btn-secondary {
+            background: #ecf0e8;
+            color: var(--text);
+        }
+
+        .btn-accent {
+            background: #fff1e1;
+            color: #9a581f;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--muted);
+            border: 1px solid var(--line);
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .toolbar .field,
+        .toolbar .select {
+            min-width: 180px;
+            flex: 1;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .tab {
+            border: 1px solid var(--line);
+            background: #f2f4ef;
+            color: var(--muted);
+            padding: 8px 12px;
+            border-radius: 999px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .tab.active {
+            background: var(--primary);
+            color: #fff;
+            border-color: var(--primary);
+        }
+
+        .model-list {
+            display: grid;
+            gap: 10px;
+            max-height: 540px;
+            overflow-y: auto;
+            padding-right: 6px;
+        }
+
+        .model-list::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .model-list::-webkit-scrollbar-thumb {
+            background: #cad7c6;
+            border-radius: 999px;
+        }
+
+        .model-item {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 14px;
+            background: #fff;
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .model-item.selected {
+            border-color: rgba(30, 106, 82, 0.48);
+            background: #f5fbf7;
+        }
+
+        .model-meta {
+            min-width: 0;
+        }
+
+        .model-name {
+            font-weight: 700;
+            word-break: break-word;
+        }
+
+        .model-id {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 4px;
+            word-break: break-all;
+            line-height: 1.45;
+        }
+
+        .model-tags {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .tag {
+            font-size: 11px;
+            border-radius: 999px;
+            padding: 4px 8px;
+            background: #eef3ed;
+            color: #4b5c4a;
+        }
+
+        .tag.recommended {
+            background: #e7f3eb;
+            color: #176347;
+        }
+
+        .tag.selected {
+            background: #e7efff;
+            color: #3050a8;
+        }
+
+        .model-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .panel-note,
+        .result-box {
+            border-radius: 14px;
+            padding: 14px;
+            line-height: 1.6;
+        }
+
+        .panel-note {
+            background: #f2f5ef;
+            color: #465243;
+            font-size: 13px;
+        }
+
+        .result-box {
+            background: #f9faf8;
+            border: 1px solid var(--line);
+            min-height: 68px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .status-success {
+            background: var(--success-bg);
+            border: 1px solid #b7dfc4;
+        }
+
+        .status-error {
+            background: var(--error-bg);
+            border: 1px solid #efc2c0;
+        }
+
+        .status-info {
+            background: var(--info-bg);
+            border: 1px solid #bfd2f5;
+        }
+
+        .split {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .toast {
+            position: fixed;
+            right: 18px;
+            top: 18px;
+            padding: 12px 16px;
+            border-radius: 14px;
+            color: #fff;
+            background: rgba(24, 79, 61, 0.95);
+            box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+            opacity: 0;
+            transform: translateY(-8px);
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            z-index: 20;
+            max-width: 360px;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast.error {
+            background: rgba(160, 48, 39, 0.96);
+        }
+
+        .toast.info {
+            background: rgba(49, 87, 156, 0.96);
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        .empty {
+            padding: 18px;
+            border: 1px dashed var(--line);
+            border-radius: 14px;
+            color: var(--muted);
+            text-align: center;
+            background: rgba(255, 255, 255, 0.45);
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 980px) {
+            .workbench {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .shell {
+                padding: 14px;
+            }
+
+            .hero {
+                padding: 18px;
+            }
+
+            .hero h1 {
+                font-size: 26px;
+            }
+
+            .provider-actions,
+            .split,
+            .model-item {
+                grid-template-columns: 1fr;
+                display: grid;
+            }
+
+            .model-actions {
+                justify-content: stretch;
+            }
+
+            .model-actions .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="shell">
+        <section class="hero">
+            <div class="hero-top">
+                <div>
+                    <h1>free-proxy Python 控制台</h1>
+                    <p>按 TypeScript 版的交互方式重做：先配置 provider，再看推荐模型，最后直接做探测与聊天验证。所有诊断都尽量展示为可操作的信息，而不是一句模糊的失败。</p>
+                </div>
+                <button class="btn btn-accent" id="reloadPageBtn">刷新状态</button>
+            </div>
+            <div class="hero-stats">
+                <div class="stat">
+                    <div class="stat-label">已配置 Provider</div>
+                    <div class="stat-value" id="configuredCount">0 / 8</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">当前测试目标</div>
+                    <div class="stat-value" id="selectedProviderText">未选择</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">HTTP 入口</div>
+                    <div class="stat-value mono" style="font-size: 18px;">:8765</div>
+                </div>
+            </div>
+        </section>
+
+        <div class="page-flow">
+            <section class="card">
+                <div class="card-head">
+                    <div>
+                        <h2>1. Provider 配置</h2>
+                        <div class="subtle">保存 Key 后可立即验证；验证会发起真实请求，不只是看模型列表。</div>
+                    </div>
+                </div>
+                <div class="provider-grid" id="providerGrid"></div>
+            </section>
+
+            <section class="workbench" aria-label="模型与测试工作区">
+                <section class="card">
+                    <div class="card-head">
+                        <div>
+                            <h2>2. 模型浏览与推荐</h2>
+                            <div class="subtle">推荐模型优先展示；你可以先选模型，再在右侧直接做对话测试。</div>
+                        </div>
+                        <div class="toolbar">
+                            <input class="field" id="modelSearch" placeholder="搜索 provider / model id">
+                            <button class="btn btn-secondary" id="refreshModelsBtn">刷新当前列表</button>
+                        </div>
+                    </div>
+                    <div class="tabs" id="providerTabs"></div>
+                    <div class="panel-note" id="modelSummary">先配置至少一个 provider，再加载模型列表。</div>
+                    <div class="model-list" id="modelList" style="margin-top: 12px;"></div>
+                </section>
+
+                <div class="workbench-side">
+                    <section class="card">
+                        <div class="card-head">
+                            <div>
+                                <h2>3. 聊天测试台</h2>
+                                <div class="subtle">选中模型后会自动填入下方表单，也可以手动改成任意模型 ID。</div>
+                            </div>
+                        </div>
+                        <div class="split" style="margin-bottom: 12px;">
+                            <select class="select" id="chatProvider"></select>
+                            <input class="field mono" id="chatModel" list="modelSuggestions" placeholder="输入或选择模型 ID">
+                        </div>
+                        <datalist id="modelSuggestions"></datalist>
+                        <textarea class="textarea" id="chatPrompt" placeholder="输入测试 Prompt">hello</textarea>
+                        <div class="toolbar" style="margin-top: 12px;">
+                            <button class="btn btn-primary" id="sendChatBtn">发送测试请求</button>
+                            <button class="btn btn-ghost" id="fillProbePromptBtn">填入最小测试 Prompt</button>
+                        </div>
+                        <div id="chatResult" class="result-box" style="margin-top: 12px;">等待请求。</div>
+                    </section>
+
+                    <section class="card">
+                        <div class="card-head">
+                            <div>
+                                <h2>4. 诊断面板</h2>
+                                <div class="subtle">保存、验证、探测、聊天请求的关键结果都会显示在这里。</div>
+                            </div>
+                        </div>
+                        <div id="diagnosticsBox" class="result-box status-info">还没有执行诊断。</div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="card" id="openClawSection">
+                <div class="card-head">
+                    <div>
+                        <h2>5. OpenClaw 配置</h2>
+                        <div class="subtle">和 TS 版一致：支持检测、设为默认模型、加入备用链、查看与恢复备份。</div>
+                    </div>
+                </div>
+                <div id="openClawStatus" class="result-box status-info">正在检测 OpenClaw 配置...</div>
+                <div id="openClawActions" class="toolbar" style="margin-top: 12px;"></div>
+                <div id="backupSection" style="margin-top: 12px;"></div>
+            </section>
+
+            <section class="card">
+                <div class="card-head">
+                    <div>
+                        <h2>6. 接入说明</h2>
+                        <div class="subtle">Python 后端当前只实现了核心配置、推荐、探测、聊天测试；这里给出最直接的接入方式。</div>
+                    </div>
+                </div>
+                <div class="panel-note">
+                    OpenAI 兼容入口：<span class="mono">http://localhost:8765/chat/completions</span>
+                    <br>
+                    推荐先用当前选中的 provider 和模型做联通性验证，再接到外部工具。
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const PROVIDERS = [
+            { id: 'openrouter', name: 'OpenRouter', tier: '免费', tierClass: 'free', placeholder: 'sk-or-...', keyUrl: 'https://openrouter.ai/keys' },
+            { id: 'groq', name: 'Groq', tier: '免费', tierClass: 'free', placeholder: 'gsk-...', keyUrl: 'https://console.groq.com/keys' },
+            { id: 'opencode', name: 'OpenCode Zen', tier: '部分免费', tierClass: 'partial', placeholder: 'sk-...', keyUrl: 'https://opencode.ai/auth' },
+            { id: 'gemini', name: 'Gemini', tier: '免费', tierClass: 'free', placeholder: 'AIza...', keyUrl: 'https://aistudio.google.com/app/apikey' },
+            { id: 'github', name: 'GitHub Models', tier: '免费', tierClass: 'free', placeholder: 'ghp_...', keyUrl: 'https://github.com/settings/tokens' },
+            { id: 'mistral', name: 'Mistral', tier: '免费', tierClass: 'free', placeholder: 'mist-...', keyUrl: 'https://console.mistral.ai/api-keys' },
+            { id: 'cerebras', name: 'Cerebras', tier: '免费', tierClass: 'free', placeholder: 'csk-...', keyUrl: 'https://cloud.cerebras.ai/' },
+            { id: 'sambanova', name: 'SambaNova', tier: '免费', tierClass: 'free', placeholder: 'sn-...', keyUrl: 'https://cloud.sambanova.ai/' },
+        ];
+
+        const state = {
+            statuses: {},
+            activeProvider: localStorage.getItem('py-ui-active-provider') || 'all',
+            selectedProvider: localStorage.getItem('py-ui-selected-provider') || '',
+            selectedModel: localStorage.getItem('py-ui-selected-model') || '',
+            modelCache: {},
+            verifyResults: {},
+            editing: {},
+        };
+
+        const toast = document.getElementById('toast');
+        const providerGrid = document.getElementById('providerGrid');
+        const providerTabs = document.getElementById('providerTabs');
+        const modelList = document.getElementById('modelList');
+        const modelSearch = document.getElementById('modelSearch');
+        const modelSummary = document.getElementById('modelSummary');
+        const diagnosticsBox = document.getElementById('diagnosticsBox');
+        const configuredCount = document.getElementById('configuredCount');
+        const selectedProviderText = document.getElementById('selectedProviderText');
+        const chatProvider = document.getElementById('chatProvider');
+        const chatModel = document.getElementById('chatModel');
+        const chatPrompt = document.getElementById('chatPrompt');
+        const chatResult = document.getElementById('chatResult');
+        const modelSuggestions = document.getElementById('modelSuggestions');
+        const openClawStatus = document.getElementById('openClawStatus');
+        const openClawActions = document.getElementById('openClawActions');
+        const backupSection = document.getElementById('backupSection');
+
+        function showToast(message, type = 'success') {
+            toast.textContent = message;
+            toast.className = `toast show ${type === 'success' ? '' : type}`.trim();
+            window.clearTimeout(showToast.timer);
+            showToast.timer = window.setTimeout(() => {
+                toast.className = 'toast';
+            }, 2600);
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function configuredProviders() {
+            return PROVIDERS.filter((provider) => state.statuses[provider.id] && state.statuses[provider.id].configured);
+        }
+
+        function persistSelection() {
+            localStorage.setItem('py-ui-active-provider', state.activeProvider);
+            localStorage.setItem('py-ui-selected-provider', state.selectedProvider || '');
+            localStorage.setItem('py-ui-selected-model', state.selectedModel || '');
+        }
+
+        async function requestJson(url, options = {}) {
+            const response = await fetch(url, options);
+            let data = {};
+            try {
+                data = await response.json();
+            } catch {
+                data = {};
+            }
+            if (!response.ok) {
+                const error = new Error(data.error || `HTTP ${response.status}`);
+                error.payload = data;
+                throw error;
+            }
+            return data;
+        }
+
+        function setDiagnostics(kind, lines) {
+            diagnosticsBox.className = `result-box ${kind}`;
+            diagnosticsBox.textContent = lines.join('\n');
+        }
+
+        function refreshHeaderStats() {
+            const total = PROVIDERS.length;
+            const configured = configuredProviders().length;
+            configuredCount.textContent = `${configured} / ${total}`;
+            selectedProviderText.textContent = state.selectedProvider && state.selectedModel
+                ? `${state.selectedProvider}`
+                : '未选择';
+        }
+
+        function renderProviderCards() {
+            providerGrid.innerHTML = PROVIDERS.map((provider) => {
+                const status = state.statuses[provider.id] || { configured: false, masked: '' };
+                const verify = state.verifyResults[provider.id];
+                const isEditing = Boolean(state.editing[provider.id]) || !status.configured;
+                const note = verify
+                    ? verify.ok
+                        ? `最近验证成功：${verify.verified_model || '已通过真实请求验证'}`
+                        : `最近验证失败：${verify.error || '未知错误'}${verify.suggestion ? `\n建议：${verify.suggestion}` : ''}`
+                    : '建议保存 Key 后点一次验证，确认 provider 能真实调用模型。';
+
+                return `
+                    <div class="provider-card ${status.configured ? 'configured' : ''}">
+                        <div class="provider-head">
+                            <div>
+                                <div class="provider-title">
+                                    <span class="provider-name">${provider.name}</span>
+                                    <span class="badge ${provider.tierClass}">${provider.tier}</span>
+                                </div>
+                                <div class="provider-help">Key 获取：<a href="${provider.keyUrl}" target="_blank" rel="noreferrer">${provider.keyUrl.replace('https://', '')}</a></div>
+                            </div>
+                            <div class="provider-state ${status.configured ? 'ok' : ''}">${status.configured ? '已配置' : '未配置'}</div>
+                        </div>
+
+                        ${isEditing ? `
+                            <div class="provider-actions">
+                                <input class="field" id="key-${provider.id}" type="password" autocomplete="off" placeholder="${provider.placeholder}">
+                                <button class="btn btn-primary" data-action="save" data-provider="${provider.id}">保存</button>
+                                ${status.configured ? `<button class="btn btn-ghost" data-action="cancel-edit" data-provider="${provider.id}">取消</button>` : `<button class="btn btn-ghost" data-action="verify" data-provider="${provider.id}" ${status.configured ? '' : 'disabled'}>验证</button>`}
+                            </div>
+                        ` : `
+                            <div class="masked mono">${escapeHtml(status.masked || '已配置')}</div>
+                            <div class="provider-actions">
+                                <button class="btn btn-secondary" data-action="verify" data-provider="${provider.id}">验证</button>
+                                <button class="btn btn-accent" data-action="select-provider" data-provider="${provider.id}">查看模型</button>
+                                <button class="btn btn-ghost" data-action="edit" data-provider="${provider.id}">修改</button>
+                            </div>
+                        `}
+
+                        <div class="provider-note">${escapeHtml(note)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderProviderTabs() {
+            const configured = configuredProviders();
+            const tabs = [{ id: 'all', name: '全部已配置' }, ...configured.map((provider) => ({ id: provider.id, name: provider.name }))];
+
+            if (!configured.length) {
+                providerTabs.innerHTML = '';
+                modelSummary.textContent = '先配置至少一个 provider，再加载模型列表。';
+                modelList.innerHTML = '<div class="empty">当前没有可浏览的模型。</div>';
+                return;
+            }
+
+            if (state.activeProvider !== 'all' && !configured.some((provider) => provider.id === state.activeProvider)) {
+                state.activeProvider = 'all';
+            }
+
+            providerTabs.innerHTML = tabs.map((tab) => `
+                <button class="tab ${tab.id === state.activeProvider ? 'active' : ''}" data-tab="${tab.id}">${tab.name}</button>
+            `).join('');
+        }
+
+        function normalizeModels(providerId, recommendedItems, allModels) {
+            const recommendedSet = new Set(recommendedItems || []);
+            const merged = [];
+            const seen = new Set();
+
+            for (const model of [...(recommendedItems || []), ...(allModels || [])]) {
+                if (!model || seen.has(model)) {
+                    continue;
+                }
+                seen.add(model);
+                merged.push({
+                    provider: providerId,
+                    id: model,
+                    name: model,
+                    isRecommended: recommendedSet.has(model),
+                });
+            }
+
+            return merged;
+        }
+
+        async function loadModelsForProvider(providerId, force = false) {
+            if (!force && state.modelCache[providerId] && state.modelCache[providerId].items) {
+                return state.modelCache[providerId].items;
+            }
+
+            state.modelCache[providerId] = { loading: true, items: [], error: '' };
+
+            const recommendedPromise = requestJson(`/api/providers/${providerId}/models/recommended`).catch((error) => ({ error }));
+            const allModelsPromise = requestJson(`/providers/${providerId}/models`).catch((error) => ({ error }));
+
+            const [recommendedData, allModelsData] = await Promise.all([recommendedPromise, allModelsPromise]);
+            const recommendedItems = recommendedData && !recommendedData.error ? (recommendedData.items || []) : [];
+            const allModels = allModelsData && !allModelsData.error ? (allModelsData.models || []) : [];
+            const errorMessage = recommendedData.error?.message || allModelsData.error?.message || '';
+
+            const items = normalizeModels(providerId, recommendedItems, allModels);
+            state.modelCache[providerId] = {
+                loading: false,
+                items,
+                error: errorMessage,
+                recommendedCount: recommendedItems.length,
+                totalCount: items.length,
+            };
+            return items;
+        }
+
+        async function ensureVisibleModels(force = false) {
+            const configured = configuredProviders();
+            if (!configured.length) {
+                renderProviderTabs();
+                return;
+            }
+
+            if (state.activeProvider === 'all') {
+                await Promise.all(configured.map((provider) => loadModelsForProvider(provider.id, force)));
+            } else {
+                await loadModelsForProvider(state.activeProvider, force);
+            }
+            renderModelSection();
+            refreshChatOptions();
+        }
+
+        function visibleModels() {
+            const search = modelSearch.value.trim().toLowerCase();
+            const items = state.activeProvider === 'all'
+                ? configuredProviders().flatMap((provider) => (state.modelCache[provider.id]?.items || []))
+                : (state.modelCache[state.activeProvider]?.items || []);
+
+            const deduped = [];
+            const seen = new Set();
+            for (const item of items) {
+                const key = `${item.provider}:${item.id}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    deduped.push(item);
+                }
+            }
+
+            deduped.sort((left, right) => {
+                if (left.isRecommended !== right.isRecommended) {
+                    return left.isRecommended ? -1 : 1;
+                }
+                if (left.provider !== right.provider) {
+                    return left.provider.localeCompare(right.provider);
+                }
+                return left.id.localeCompare(right.id);
+            });
+
+            if (!search) {
+                return deduped;
+            }
+
+            return deduped.filter((item) => {
+                const haystack = `${item.provider} ${item.id}`.toLowerCase();
+                return haystack.includes(search);
+            });
+        }
+
+        function renderModelSection() {
+            renderProviderTabs();
+            const models = visibleModels();
+            const configured = configuredProviders();
+
+            if (!configured.length) {
+                return;
+            }
+
+            if (state.activeProvider === 'all') {
+                const total = configured.reduce((sum, provider) => sum + (state.modelCache[provider.id]?.items || []).length, 0);
+                modelSummary.textContent = `已汇总 ${configured.length} 个已配置 provider，共 ${total} 个候选模型。推荐模型会排在前面。`;
+            } else {
+                const cache = state.modelCache[state.activeProvider];
+                if (cache && cache.error && cache.items.length === 0) {
+                    modelSummary.textContent = `${state.activeProvider} 模型列表加载失败：${cache.error}`;
+                } else if (cache) {
+                    modelSummary.textContent = `${state.activeProvider} 当前有 ${cache.totalCount || 0} 个候选模型，其中 ${cache.recommendedCount || 0} 个来自推荐列表。`;
+                }
+            }
+
+            if (!models.length) {
+                modelList.innerHTML = '<div class="empty">当前筛选条件下没有模型。</div>';
+                return;
+            }
+
+            modelList.innerHTML = models.map((item) => {
+                const isSelected = state.selectedProvider === item.provider && state.selectedModel === item.id;
+                return `
+                    <div class="model-item ${isSelected ? 'selected' : ''}">
+                        <div class="model-meta">
+                            <div class="model-name">${escapeHtml(item.id)}</div>
+                            <div class="model-id">provider: ${escapeHtml(item.provider)}</div>
+                            <div class="model-tags">
+                                ${item.isRecommended ? '<span class="tag recommended">推荐</span>' : ''}
+                                ${isSelected ? '<span class="tag selected">当前测试目标</span>' : ''}
+                            </div>
+                        </div>
+                        <div class="model-actions">
+                            <button class="btn btn-secondary" data-action="probe-model" data-provider="${item.provider}" data-model="${escapeHtml(item.id)}">探测</button>
+                            <button class="btn btn-primary" data-action="choose-model" data-provider="${item.provider}" data-model="${escapeHtml(item.id)}">选为测试模型</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function refreshChatOptions() {
+            const configured = configuredProviders();
+            chatProvider.innerHTML = configured.length
+                ? configured.map((provider) => `<option value="${provider.id}">${provider.name}</option>`).join('')
+                : '<option value="">暂无已配置 provider</option>';
+
+            if (state.selectedProvider && configured.some((provider) => provider.id === state.selectedProvider)) {
+                chatProvider.value = state.selectedProvider;
+            } else if (configured.length) {
+                chatProvider.value = configured[0].id;
+            }
+
+            if (state.selectedModel) {
+                chatModel.value = state.selectedModel;
+            }
+
+            renderModelSuggestions();
+            refreshHeaderStats();
+        }
+
+        function renderModelSuggestions() {
+            const providerId = chatProvider.value;
+            const items = providerId ? (state.modelCache[providerId]?.items || []) : [];
+            modelSuggestions.innerHTML = items.map((item) => `<option value="${escapeHtml(item.id)}"></option>`).join('');
+        }
+
+        async function loadStatuses() {
+            state.statuses = await requestJson('/api/provider-keys');
+            renderProviderCards();
+            refreshHeaderStats();
+            renderProviderTabs();
+            refreshChatOptions();
+        }
+
+        async function saveProviderKey(providerId, button) {
+            const input = document.getElementById(`key-${providerId}`);
+            const apiKey = (input && input.value || '').trim();
+            if (!apiKey) {
+                showToast('请输入 API Key', 'error');
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = '保存中...';
+            try {
+                const data = await requestJson(`/api/provider-keys/${providerId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: apiKey }),
+                });
+                state.editing[providerId] = false;
+                await loadStatuses();
+                state.activeProvider = providerId;
+                persistSelection();
+                showToast(`${providerId} 已保存`);
+                setDiagnostics('status-success', [
+                    `Provider: ${providerId}`,
+                    `状态: 已保存`,
+                    `Masked: ${data.masked || '-'}`,
+                    '下一步建议：点击“验证”确认这个 Key 真的可以调用模型。',
+                ]);
+                await ensureVisibleModels(true);
+            } catch (error) {
+                showToast(error.message || '保存失败', 'error');
+                setDiagnostics('status-error', [
+                    `Provider: ${providerId}`,
+                    '状态: 保存失败',
+                    `错误: ${error.message || '未知错误'}`,
+                ]);
+            } finally {
+                button.disabled = false;
+                button.textContent = '保存';
+            }
+        }
+
+        async function verifyProvider(providerId, button) {
+            if (button) {
+                button.disabled = true;
+                button.textContent = '验证中...';
+            }
+
+            try {
+                const data = await requestJson(`/api/provider-keys/${providerId}/verify`, { method: 'POST' });
+                state.verifyResults[providerId] = data;
+                renderProviderCards();
+                showToast(`${providerId} 验证成功`);
+                setDiagnostics('status-success', [
+                    `Provider: ${providerId}`,
+                    `状态: 验证成功`,
+                    `候选模型数: ${(data.models || []).length}`,
+                    `验证通过模型: ${data.verified_model || '-'}`,
+                    data.note || '',
+                ].filter(Boolean));
+                await ensureVisibleModels(true);
+            } catch (error) {
+                const payload = error.payload || {};
+                state.verifyResults[providerId] = payload;
+                renderProviderCards();
+                showToast(`${providerId} 验证失败`, 'error');
+                setDiagnostics('status-error', [
+                    `Provider: ${providerId}`,
+                    '状态: 验证失败',
+                    `错误: ${payload.error || error.message || '未知错误'}`,
+                    payload.category ? `分类: ${payload.category}` : '',
+                    payload.status ? `HTTP: ${payload.status}` : '',
+                    payload.suggestion ? `建议: ${payload.suggestion}` : '',
+                ].filter(Boolean));
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '验证';
+                }
+            }
+        }
+
+        function chooseModel(providerId, modelId) {
+            state.selectedProvider = providerId;
+            state.selectedModel = modelId;
+            state.activeProvider = providerId;
+            chatProvider.value = providerId;
+            chatModel.value = modelId;
+            persistSelection();
+            renderModelSection();
+            refreshChatOptions();
+            showToast(`已选择 ${providerId} / ${modelId}`);
+            setDiagnostics('status-info', [
+                '当前测试目标已更新',
+                `Provider: ${providerId}`,
+                `Model: ${modelId}`,
+                '你现在可以直接发起探测或聊天测试。',
+            ]);
+        }
+
+        async function probeModel(providerId, modelId, button) {
+            if (button) {
+                button.disabled = true;
+                button.textContent = '探测中...';
+            }
+            try {
+                const data = await requestJson(`/providers/${providerId}/probe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelId }),
+                });
+                chooseModel(providerId, modelId);
+                showToast('模型探测成功');
+                setDiagnostics('status-success', [
+                    `Provider: ${providerId}`,
+                    `Model: ${modelId}`,
+                    `探测结果: 成功`,
+                    data.actual_model ? `实际调用模型: ${data.actual_model}` : '',
+                    data.content ? `返回内容: ${data.content}` : '',
+                ].filter(Boolean));
+            } catch (error) {
+                const payload = error.payload || {};
+                showToast('模型探测失败', 'error');
+                setDiagnostics('status-error', [
+                    `Provider: ${providerId}`,
+                    `Model: ${modelId}`,
+                    '探测结果: 失败',
+                    `错误: ${payload.error || error.message || '未知错误'}`,
+                    payload.category ? `分类: ${payload.category}` : '',
+                    payload.status ? `HTTP: ${payload.status}` : '',
+                    payload.suggestion ? `建议: ${payload.suggestion}` : '',
+                ].filter(Boolean));
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '探测';
+                }
+            }
+        }
+
+        async function sendChat(button) {
+            const providerId = chatProvider.value.trim();
+            const modelId = chatModel.value.trim();
+            const prompt = chatPrompt.value.trim();
+            if (!providerId || !modelId) {
+                showToast('请先选择 provider 和 model', 'error');
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = '发送中...';
+            chatResult.className = 'result-box';
+            chatResult.textContent = '请求进行中...';
+
+            try {
+                const data = await requestJson('/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: providerId, model: modelId, prompt: prompt || 'hello' }),
+                });
+                chooseModel(providerId, modelId);
+                chatResult.className = 'result-box status-success';
+                chatResult.textContent = data.content || '';
+                setDiagnostics('status-success', [
+                    `Provider: ${providerId}`,
+                    `Model: ${modelId}`,
+                    `聊天测试: 成功`,
+                    data.actual_model ? `实际调用模型: ${data.actual_model}` : '',
+                ].filter(Boolean));
+            } catch (error) {
+                const payload = error.payload || {};
+                chatResult.className = 'result-box status-error';
+                chatResult.textContent = [
+                    payload.error || error.message || '请求失败',
+                    payload.category ? `分类: ${payload.category}` : '',
+                    payload.status ? `HTTP: ${payload.status}` : '',
+                    payload.suggestion ? `建议: ${payload.suggestion}` : '',
+                ].filter(Boolean).join('\n');
+                setDiagnostics('status-error', [
+                    `Provider: ${providerId}`,
+                    `Model: ${modelId}`,
+                    '聊天测试: 失败',
+                    `错误: ${payload.error || error.message || '未知错误'}`,
+                    payload.category ? `分类: ${payload.category}` : '',
+                    payload.status ? `HTTP: ${payload.status}` : '',
+                    payload.suggestion ? `建议: ${payload.suggestion}` : '',
+                ].filter(Boolean));
+            } finally {
+                button.disabled = false;
+                button.textContent = '发送测试请求';
+            }
+        }
+
+        async function checkOpenClawStatus() {
+            try {
+                const data = await requestJson('/api/detect-openclaw');
+                if (data.exists && data.isValid) {
+                    openClawStatus.className = 'result-box status-success';
+                    openClawStatus.textContent = `已检测到 OpenClaw 配置\n路径: ${data.path}`;
+                    openClawActions.innerHTML = `
+                        <button class="btn btn-primary" data-oc-action="configure" data-mode="default">设为 OpenClaw 默认模型</button>
+                        <button class="btn btn-secondary" data-oc-action="configure" data-mode="fallback">加入 OpenClaw 备用模型</button>
+                    `;
+                } else if (data.exists && !data.isValid) {
+                    openClawStatus.className = 'result-box status-error';
+                    openClawStatus.textContent = `检测到 OpenClaw 配置文件，但 JSON 格式不正确\n路径: ${data.path}`;
+                    openClawActions.innerHTML = '';
+                } else {
+                    openClawStatus.className = 'result-box status-info';
+                    openClawStatus.textContent = '未检测到 OpenClaw 配置文件。';
+                    openClawActions.innerHTML = `
+                        <button class="btn btn-primary" data-oc-action="configure" data-mode="default">创建并设为默认模型</button>
+                        <button class="btn btn-secondary" data-oc-action="configure" data-mode="fallback">创建并加入备用模型</button>
+                    `;
+                }
+                await loadBackups();
+            } catch (error) {
+                openClawStatus.className = 'result-box status-error';
+                openClawStatus.textContent = `检测 OpenClaw 失败: ${error.message || '未知错误'}`;
+                openClawActions.innerHTML = '';
+            }
+        }
+
+        async function configureOpenClaw(mode, button) {
+            button.disabled = true;
+            const label = button.textContent;
+            button.textContent = '配置中...';
+            try {
+                const data = await requestJson('/api/configure-openclaw', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode }),
+                });
+                showToast(data.message || 'OpenClaw 配置成功');
+                setDiagnostics('status-success', [
+                    'OpenClaw 配置成功',
+                    mode === 'default' ? '模式: 默认模型' : '模式: 备用模型',
+                    data.backup ? `备份: ${data.backup}` : '备份: 首次创建，无旧配置可备份',
+                ]);
+                await checkOpenClawStatus();
+            } catch (error) {
+                const payload = error.payload || {};
+                showToast(payload.error || error.message || '配置失败', 'error');
+                setDiagnostics('status-error', [
+                    'OpenClaw 配置失败',
+                    `错误: ${payload.error || error.message || '未知错误'}`,
+                ]);
+            } finally {
+                button.disabled = false;
+                button.textContent = label;
+            }
+        }
+
+        async function loadBackups() {
+            try {
+                const data = await requestJson('/api/backups');
+                const backups = Array.isArray(data.backups) ? data.backups : [];
+                if (!backups.length) {
+                    backupSection.innerHTML = '<div class="panel-note">暂无 OpenClaw 备份文件。</div>';
+                    return;
+                }
+
+                backupSection.innerHTML = `
+                    <div class="panel-note" style="margin-bottom: 8px;">最近备份（最多展示 5 条）</div>
+                    ${backups.slice(0, 5).map((name) => `
+                        <div class="model-item" style="padding: 10px 12px; margin-bottom: 8px;">
+                            <div class="model-meta">
+                                <div class="model-name mono">${escapeHtml(name)}</div>
+                            </div>
+                            <div class="model-actions">
+                                <button class="btn btn-ghost" data-oc-action="restore" data-backup="${escapeHtml(name)}">恢复</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                `;
+            } catch (error) {
+                backupSection.innerHTML = `<div class="result-box status-error">加载备份失败: ${escapeHtml(error.message || '未知错误')}</div>`;
+            }
+        }
+
+        async function restoreBackup(backupName, button) {
+            button.disabled = true;
+            const label = button.textContent;
+            button.textContent = '恢复中...';
+            try {
+                await requestJson('/api/restore-backup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ backup: backupName }),
+                });
+                showToast(`已恢复备份: ${backupName}`);
+                setDiagnostics('status-success', [
+                    'OpenClaw 备份恢复成功',
+                    `备份文件: ${backupName}`,
+                ]);
+                await checkOpenClawStatus();
+            } catch (error) {
+                const payload = error.payload || {};
+                showToast(payload.error || error.message || '恢复失败', 'error');
+                setDiagnostics('status-error', [
+                    'OpenClaw 备份恢复失败',
+                    `错误: ${payload.error || error.message || '未知错误'}`,
+                ]);
+            } finally {
+                button.disabled = false;
+                button.textContent = label;
+            }
+        }
+
+        providerGrid.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) {
+                return;
+            }
+
+            const action = button.dataset.action;
+            const providerId = button.dataset.provider;
+            if (!providerId) {
+                return;
+            }
+
+            if (action === 'save') {
+                await saveProviderKey(providerId, button);
+                return;
+            }
+            if (action === 'verify') {
+                await verifyProvider(providerId, button);
+                return;
+            }
+            if (action === 'edit') {
+                state.editing[providerId] = true;
+                renderProviderCards();
+                return;
+            }
+            if (action === 'cancel-edit') {
+                state.editing[providerId] = false;
+                renderProviderCards();
+                return;
+            }
+            if (action === 'select-provider') {
+                state.activeProvider = providerId;
+                persistSelection();
+                await ensureVisibleModels(false);
+            }
+        });
+
+        providerTabs.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-tab]');
+            if (!button) {
+                return;
+            }
+            state.activeProvider = button.dataset.tab;
+            persistSelection();
+            await ensureVisibleModels(false);
+        });
+
+        modelList.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) {
+                return;
+            }
+            const providerId = button.dataset.provider;
+            const modelId = button.dataset.model;
+            if (!providerId || !modelId) {
+                return;
+            }
+            if (button.dataset.action === 'choose-model') {
+                chooseModel(providerId, modelId);
+                return;
+            }
+            if (button.dataset.action === 'probe-model') {
+                await probeModel(providerId, modelId, button);
+            }
+        });
+
+        modelSearch.addEventListener('input', () => {
+            renderModelSection();
+        });
+
+        chatProvider.addEventListener('change', () => {
+            renderModelSuggestions();
+            if (!state.selectedProvider || state.selectedProvider !== chatProvider.value) {
+                const firstModel = state.modelCache[chatProvider.value]?.items?.[0]?.id || '';
+                if (firstModel && !chatModel.value) {
+                    chatModel.value = firstModel;
+                }
+            }
+        });
+
+        document.getElementById('refreshModelsBtn').addEventListener('click', async () => {
+            await ensureVisibleModels(true);
+            showToast('模型列表已刷新');
+        });
+
+        document.getElementById('sendChatBtn').addEventListener('click', async (event) => {
+            await sendChat(event.currentTarget);
+        });
+
+        document.getElementById('fillProbePromptBtn').addEventListener('click', () => {
+            chatPrompt.value = 'hello';
+        });
+
+        document.getElementById('reloadPageBtn').addEventListener('click', async () => {
+            await bootstrap(true);
+            showToast('状态已刷新', 'info');
+        });
+
+        openClawActions.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-oc-action]');
+            if (!button) {
+                return;
+            }
+            const action = button.dataset.ocAction;
+            if (action === 'configure') {
+                await configureOpenClaw(button.dataset.mode, button);
+            }
+        });
+
+        backupSection.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-oc-action="restore"]');
+            if (!button) {
+                return;
+            }
+            const backup = button.dataset.backup || '';
+            if (!backup) {
+                return;
+            }
+            await restoreBackup(backup, button);
+        });
+
+        async function bootstrap(forceModels = false) {
+            await loadStatuses();
+            await ensureVisibleModels(forceModels);
+            await checkOpenClawStatus();
+            setDiagnostics('status-info', [
+                '页面已就绪',
+                `已配置 provider 数: ${configuredProviders().length}`,
+                configuredProviders().length ? '可以直接点“验证”或“探测”。' : '请先配置至少一个 provider 的 API Key。',
+            ]);
+        }
+
+        bootstrap(true).catch((error) => {
+            setDiagnostics('status-error', [
+                '页面初始化失败',
+                error.message || '未知错误',
+            ]);
+            showToast('初始化失败', 'error');
+        });
+    </script>
+</body>
+
+</html>
