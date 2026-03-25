@@ -46,6 +46,15 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(client.list_models(), ['a', 'b'])
         self.assertEqual(client.chat('a', 'ok'), 'ok')
 
+    def test_openai_chat_raises_when_content_is_null(self) -> None:
+        spec = get_provider_spec('openrouter')
+        transport = FakeTransport({
+            ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': None}}]}).encode()),
+        })
+        client = ProviderClient(spec=spec, api_key='x', transport=transport)
+        with self.assertRaises(Exception):
+            client.chat('a', 'ok')
+
     def test_openrouter_only_keeps_free_or_zero_cost_models(self) -> None:
         spec = get_provider_spec('openrouter')
         transport = FakeTransport({

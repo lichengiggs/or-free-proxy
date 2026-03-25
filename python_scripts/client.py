@@ -41,6 +41,7 @@ class ProviderClient:
     spec: ProviderSpec
     api_key: str
     transport: Transport | None = None
+    request_timeout_seconds: int = 12
 
     def __post_init__(self) -> None:
         if self.transport is None:
@@ -65,7 +66,13 @@ class ProviderClient:
 
     def _request_json(self, method: str, path: str, payload: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
         body = json.dumps(payload).encode('utf-8') if payload is not None else None
-        status, headers, raw = self.transport.request(method, build_url(self.spec.base_url, path, query), self._headers(), body)
+        status, headers, raw = self.transport.request(
+            method,
+            build_url(self.spec.base_url, path, query),
+            self._headers(),
+            body,
+            timeout=self.request_timeout_seconds,
+        )
         text = raw.decode('utf-8') if raw else ''
         data: Any = None
         if text:
@@ -132,6 +139,19 @@ class ProviderClient:
         content = self.chat(model_id, 'ok')
         return {'ok': True, 'content': content}
 
+    def chat_completions_raw(self, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+        if self.spec.format != 'openai':
+            raise ProviderError('provider is not openai-compatible')
+        query = get_provider_required_query(self.spec.name)
+        body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        return self.transport.request(
+            'POST',
+            build_url(self.spec.base_url, '/chat/completions', query),
+            self._headers(),
+            body,
+            timeout=self.request_timeout_seconds,
+        )
+
     def _chat_openai(self, model_id: str, prompt: str) -> str:
         payload = {
             'model': model_id,
@@ -144,9 +164,34 @@ class ProviderClient:
         if status >= 400:
             self._raise_http_error(status, data, '连通失败')
         try:
-            return str(data['choices'][0]['message']['content']).strip()
+            choices = data.get('choices') if isinstance(data, dict) else None
+            if not isinstance(choices, list) or not choices:
+                raise KeyError('missing choices')
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get('message') if isinstance(choice, dict) else {}
+            content = message.get('content') if isinstance(message, dict) else None
+
+            if isinstance(content, str):
+                text = content.strip()
+                if text:
+                    return text
+            if isinstance(content, list):
+                chunks: list[str] = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get('text')
+                        if isinstance(text, str) and text.strip():
+                            chunks.append(text.strip())
+                merged = '\n'.join(chunks).strip()
+                if merged:
+                    return merged
+
+            text = choice.get('text') if isinstance(choice, dict) else None
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+            raise KeyError('empty content')
         except Exception as exc:  # pragma: no cover - defensive
-            raise ProviderError('返回内容格式不正确') from exc
+            raise ProviderError('返回内容为空或格式不正确') from exc
 
     def _chat_gemini(self, model_id: str, prompt: str) -> str:
         payload = {
