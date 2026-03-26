@@ -20,7 +20,7 @@ def classify_error(status: int, body_text: str) -> ProviderFailure:
         return ProviderFailure('quota', '额度不足', False)
     if any(token in text for token in ('rate limit', 'too many requests', 'retry later')):
         return ProviderFailure('rate_limit', '触发频率限制', True)
-    if any(token in text for token in ('network', 'connection', 'timed out', 'timeout')):
+    if any(token in text for token in ('network', 'connection', 'timed out', 'timeout', 'certificate verify failed', 'local issuer certificate', 'ssl', 'tls')):
         return ProviderFailure('network', '网络连接失败', True)
 
     if status in (401, 403):

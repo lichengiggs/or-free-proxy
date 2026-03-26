@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
-from python_scripts.client import ProviderClient, build_url
+from python_scripts.client import ProviderClient, UrlLibTransport, build_url
 from python_scripts.config import get_provider_spec
 from python_scripts.errors import classify_error
 
@@ -35,6 +36,30 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(classify_error(429, '').category, 'rate_limit')
         self.assertEqual(classify_error(402, 'insufficient credits').category, 'quota')
         self.assertEqual(classify_error(503, 'service unavailable').category, 'server')
+        self.assertEqual(
+            classify_error(0, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate').category,
+            'network',
+        )
+
+    def test_urllib_transport_uses_certifi_ssl_context(self) -> None:
+        fake_response = unittest.mock.MagicMock()
+        fake_response.__enter__.return_value = fake_response
+        fake_response.status = 200
+        fake_response.headers.items.return_value = [('content-type', 'application/json')]
+        fake_response.read.return_value = b'{}'
+
+        with patch('python_scripts.client.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
+             patch('python_scripts.client.ssl.create_default_context', return_value='ssl-context') as context_mock, \
+             patch('python_scripts.client.urlopen', return_value=fake_response) as urlopen_mock:
+            transport = UrlLibTransport()
+            status, headers, body = transport.request('GET', 'https://example.com/models')
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers, {'content-type': 'application/json'})
+        self.assertEqual(body, b'{}')
+        where_mock.assert_called_once_with()
+        context_mock.assert_called_once_with(cafile='/tmp/test-cert.pem')
+        self.assertEqual(urlopen_mock.call_args.kwargs['context'], 'ssl-context')
 
     def test_openai_list_models_and_chat(self) -> None:
         spec = get_provider_spec('openrouter')

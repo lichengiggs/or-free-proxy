@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import ssl
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+import certifi
 
 from .config import ProviderSpec, get_provider_model_hints, get_provider_required_query
 from .errors import classify_error
@@ -27,8 +30,9 @@ class Transport(Protocol):
 class UrlLibTransport:
     def request(self, method: str, url: str, headers: dict[str, str] | None = None, body: bytes | None = None, timeout: int = 30) -> tuple[int, dict[str, str], bytes]:
         request = Request(url=url, data=body, headers=headers or {}, method=method)
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
         try:
-            with urlopen(request, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout, context=ssl_context) as response:
                 return response.status, dict(response.headers.items()), response.read()
         except HTTPError as exc:
             return exc.code, dict(exc.headers.items()) if exc.headers else {}, exc.read()

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from python_scripts.client import ProviderError
 from python_scripts.service import ProxyService, choose_candidates
 
 
@@ -62,6 +63,11 @@ class ListOkChatFailTransport:
         if url.endswith('/models'):
             return 200, {}, json.dumps({'data': [{'id': 'model-can-list'}]}).encode()
         return 429, {}, json.dumps({'error': {'message': 'rate limit'}}).encode()
+
+
+class SslVerifyFailTransport:
+    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
+        raise ProviderError('网络连接失败: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1002)')
 
 
 class ServiceTests(unittest.TestCase):
@@ -179,6 +185,17 @@ class ServiceTests(unittest.TestCase):
             self.assertFalse(verify['ok'])
             self.assertEqual(verify['category'], 'rate_limit')
             self.assertTrue(bool(verify.get('suggestion')))
+
+    def test_verify_provider_key_classifies_ssl_certificate_failure_as_network(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / '.env'
+            service = ProxyService(transport=SslVerifyFailTransport(), dotenv_path=env_path)
+            service.save_provider_key('longcat', 'lc-example-123456')
+
+            verify = service.verify_provider_key('longcat')
+            self.assertFalse(verify['ok'])
+            self.assertEqual(verify['category'], 'network')
+            self.assertIn('检查网络', verify['suggestion'])
 
     def test_public_models_exposes_auto_and_coding_aliases(self) -> None:
         service = ProxyService(transport=FakeTransport())
