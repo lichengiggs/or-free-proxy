@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 
 from .config import DOTENV_PATH, hydrate_env, load_dotenv
@@ -65,6 +66,7 @@ class ProxyService:
         health_ttl_seconds: int = 600,
         dotenv_path: Path | None = None,
         request_timeout_seconds: int = 12,
+        debug_log: Callable[..., None] | None = None,
     ) -> None:
         self.dotenv_path = dotenv_path or DOTENV_PATH
         hydrate_env(self.dotenv_path)
@@ -73,6 +75,7 @@ class ProxyService:
         self.token_limit_path = token_limit_path
         self.health_ttl_seconds = health_ttl_seconds
         self.request_timeout_seconds = request_timeout_seconds
+        self.debug_log = debug_log
 
     def available_providers(self) -> list[str]:
         return configured_provider_names()
@@ -90,6 +93,7 @@ class ProxyService:
             api_key=api_key,
             transport=self.transport,
             request_timeout_seconds=self.request_timeout_seconds,
+            debug_log=self.debug_log,
         )
 
     @staticmethod
@@ -395,17 +399,17 @@ class ProxyService:
                     body=b'',
                     content=result.content,
                 )
-            return OpenAIForwardResult(
-                ok=False,
-                provider=provider_name,
-                model=model_id,
-                status=result.status or 502,
-                headers={},
-                body=b'',
-                error=result.error,
-                category=result.category,
-                suggestion=result.suggestion,
-            )
+                return OpenAIForwardResult(
+                    ok=False,
+                    provider=provider_name,
+                    model=model_id,
+                    status=result.status or 502,
+                    headers={},
+                    body=b'',
+                    error=result.error,
+                    category=result.category,
+                    suggestion=result.suggestion,
+                )
 
         adapter = self.provider_adapter(provider_name)
         request_payload = dict(payload)
@@ -431,6 +435,16 @@ class ProxyService:
 
         text = body.decode('utf-8', errors='ignore')
         failure = classify_error(status, text)
+        if self.debug_log is not None:
+            self.debug_log(
+                'request_failed',
+                provider=provider_name,
+                model=model_id,
+                status=status,
+                category=failure.category,
+                error=text or f'upstream status {status}',
+                suggestion=remediation_suggestion(failure.category, provider_name),
+            )
         return OpenAIForwardResult(
             ok=False,
             provider=provider_name,

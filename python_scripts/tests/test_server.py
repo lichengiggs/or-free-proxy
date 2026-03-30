@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import io
 import http.client
 import json
 import os
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stderr
 from dataclasses import dataclass
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from python_scripts.cli import build_parser
 from python_scripts.server import ApiHandler
 from python_scripts.service import OpenAIForwardResult, ResolvedOpenAIRequest
 
@@ -175,6 +178,32 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('3. 模型验证', body)
         self.assertIn('探测模型', body)
         self.assertIn('http://127.0.0.1:8765/v1', body)
+
+    def test_serve_parser_accepts_debug_flag(self) -> None:
+        args = build_parser().parse_args(['serve', '--debug'])
+        self.assertEqual(args.command, 'serve')
+        self.assertTrue(args.debug)
+
+    def test_debug_mode_logs_request_and_route(self) -> None:
+        old_debug_enabled = getattr(ApiHandler, 'debug_enabled', False)
+        ApiHandler.debug_enabled = True
+        buffer = io.StringIO()
+        try:
+            with redirect_stderr(buffer):
+                status, body = self._request(
+                    'POST',
+                    '/v1/chat/completions',
+                    {'model': 'free-proxy/auto', 'messages': [{'role': 'user', 'content': 'hello'}]},
+                )
+        finally:
+            ApiHandler.debug_enabled = old_debug_enabled
+
+        self.assertEqual(status, 200)
+        output = buffer.getvalue()
+        self.assertIn('event=request_received', output)
+        self.assertIn('event=route_resolved', output)
+        self.assertIn('requested_model=free-proxy/auto', output)
+        self.assertNotIn('hello', output)
 
     def test_health_route(self) -> None:
         status, body = self._request('GET', '/health')
