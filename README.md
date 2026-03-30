@@ -213,7 +213,7 @@ npm test
 
 ## 历史方案
 
-- TypeScript 后端方案已归档为历史参考，不再作为主运行路径。
+- TypeScript 历史方案已退出运行路径，仅保留文档归档；当前唯一运行入口是 Python。
 - 历史说明见：`docs/typescript-legacy.md`
 - 迁移发布说明见：`docs/migration-python-mainline.md`
 

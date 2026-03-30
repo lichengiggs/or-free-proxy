@@ -1,47 +1,38 @@
-# Python 主线化迁移发布说明（2026-03-25）
+# Python 主线化迁移发布说明（2026-03-30）
 
-## 1. 变更摘要
+## 当前状态
 
-- Python 成为唯一后端主线：运行入口统一为 `uv run free-proxy serve`。
-- TypeScript 后端进入历史归档：见 `docs/typescript-legacy.md`。
-- 新增 Python 服务契约测试：`python_scripts/tests/test_server.py`。
-- Node 测试默认收敛为前端/历史静态守卫：`jest.web.config.js` + `__tests__/web/legacy-archive.test.ts`。
+- Python 是仓库唯一运行入口。
+- 启动命令统一为：`uv run free-proxy serve`
+- 默认验收命令：
+  - `uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'`
+  - `npm test -- --runInBand`
+  - `npx tsc --noEmit`
 
-## 2. 命令对照
+## 对外稳定接口
 
-- 旧主入口：`npm start`
-- 新主入口：`uv run free-proxy serve`
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- 公共稳定模型别名：
+  - `free-proxy/auto`
+  - `free-proxy/coding`
 
-- 旧后端测试主门禁：`npm test`（TS 后端行为）
-- 新后端测试主门禁：`uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'`
+## 本次收口结果
 
-- 保留检查：`npx tsc --noEmit`
+- Provider 元数据只保留 `python_scripts/provider_catalog.py`
+- 路由策略下沉到 `python_scripts/provider_routing.py`
+- 上游适配拆分为：
+  - `python_scripts/provider_errors.py`
+  - `python_scripts/provider_transport.py`
+  - `python_scripts/provider_adapter.py`
+- `python_scripts/service.py` 只保留状态、预算、执行编排
+- `python_scripts/server.py` 只保留 HTTP 路由与响应转换
 
-## 3. 回归证据
+## 已移除的历史运行路径
 
-    uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
-    Ran 37 tests in 3.554s
-    OK
+旧的 TypeScript runtime 与附属脚本已经退出运行路径，只保留历史文档说明，不再参与启动、测试或决策。
 
-    npm test
-    Test Suites: 1 passed, 1 total
-    Tests: 1 passed, 1 total
+## 历史资料
 
-    npx tsc --noEmit
-    (exit 0)
-
-## 4. 风险与回滚
-
-风险点：
-
-- 外部流程如果仍假设 `npm start` 启动 TS 服务，需要切换到 `uv run free-proxy serve`。
-- TS 历史测试不再参与默认门禁，后续若要验证历史行为需手动运行 `npm run test:legacy-ts`。
-
-回滚策略：
-
-1. 若 Python 主线出现问题，优先回滚本次 Python 入口与文档收敛提交。
-2. TS 历史代码仍完整保留，可临时回切验证，但不建议恢复为默认主线。
-
-## 5. 验收结论
-
-迁移完成且当前门禁全绿。后续开发默认只改 `python_scripts/` 与配套文档。
+- TypeScript 历史档案：`docs/typescript-legacy.md`
+- 当前结构说明：`docs/research.md`

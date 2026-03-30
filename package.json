@@ -1,16 +1,13 @@
 {
   "name": "free-proxy",
   "version": "1.0.0",
-  "description": "free-proxy（Python 主线）前端与历史静态测试工具集",
+  "description": "free-proxy（Python 主线）前端静态测试工具集",
   "type": "module",
   "main": "python_scripts/cli.py",
   "scripts": {
     "dev": "uv run free-proxy serve",
     "start": "uv run free-proxy serve",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.web.config.js",
-    "test:legacy-ts": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.js",
-    "update-models": "tsx scripts/update-models.js",
-    "demo:params": "node scripts/demo-params-feasibility.mjs"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.web.config.js"
   },
   "keywords": [
     "openrouter",

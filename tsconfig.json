@@ -5,7 +5,9 @@
     "moduleResolution": "node",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["jest", "node"],
+    "noEmit": true
   },
-  "include": ["src/**/*"]
+  "include": ["__tests__/web/**/*.ts"]
 }

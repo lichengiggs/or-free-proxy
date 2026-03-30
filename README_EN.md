@@ -205,7 +205,7 @@ npm test
 
 ## Legacy implementation
 
-- The TypeScript backend is now archived for reference only.
+- The TypeScript implementation is no longer part of the runtime path; Python is the only active runtime entry now.
 - See: `docs/typescript-legacy.md`
 - Migration notes: `docs/migration-python-mainline.md`
 
