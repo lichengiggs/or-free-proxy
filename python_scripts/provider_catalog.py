@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Iterable, Literal
 
 
 FormatType = Literal['openai', 'gemini', 'anthropic']
@@ -54,7 +55,13 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         model_hints=('gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'),
         required_query=(('api-version', '2024-12-01-preview'),),
     ),
-    ProviderMeta('mistral', 'https://api.mistral.ai/v1', 'MISTRAL_API_KEY', 'openai', model_hints=('mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest')),
+    ProviderMeta(
+        'mistral',
+        'https://api.mistral.ai/v1',
+        'MISTRAL_API_KEY',
+        'openai',
+        model_hints=('mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'),
+    ),
     ProviderMeta(
         'sambanova',
         'https://api.sambanova.ai/v1',
@@ -72,3 +79,30 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
 )
 
 PROVIDER_MAP: dict[str, ProviderMeta] = {provider.name: provider for provider in PROVIDERS}
+
+
+def get_provider(name: str) -> ProviderMeta:
+    provider = PROVIDER_MAP.get(name)
+    if provider is None:
+        raise KeyError(f'unknown provider: {name}')
+    return provider
+
+
+def list_providers(names: Iterable[str] | None = None) -> list[ProviderMeta]:
+    if names is None:
+        return list(PROVIDERS)
+    wanted = set(names)
+    return [provider for provider in PROVIDERS if provider.name in wanted]
+
+
+def configured_provider_names(env: dict[str, str] | None = None) -> list[str]:
+    source = os.environ if env is None else env
+    return [provider.name for provider in PROVIDERS if str(source.get(provider.api_key_env, '')).strip()]
+
+
+def get_provider_model_hints(name: str) -> list[str]:
+    return list(get_provider(name).model_hints)
+
+
+def get_provider_required_query(name: str) -> dict[str, str]:
+    return dict(get_provider(name).required_query)
