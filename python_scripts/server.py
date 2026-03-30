@@ -12,20 +12,17 @@ from urllib.parse import parse_qs, urlparse
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from python_scripts.client import ProviderError
-from python_scripts.config import get_provider_specs
-from python_scripts.config import get_provider_model_hints
 from python_scripts.opencode_config import configure_opencode_provider, detect_opencode_config
 from python_scripts.openclaw_config import configure_openclaw_model, detect_openclaw_config, list_backups, restore_backup
+from python_scripts.provider_errors import ProviderError
 from python_scripts.service import ProxyService
 
 
 class ApiHandler(BaseHTTPRequestHandler):
     service = ProxyService()
     web_root = Path(__file__).resolve().parent / 'web'
-    known_providers = {spec.name for spec in get_provider_specs()}
 
-    def _send_json(self, status: int, payload: dict) -> None:
+    def _send_json(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -46,7 +43,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _send_openai_chat_success(self, *, model: str, content: str) -> None:
         now = int(time.time())
-        payload = {
+        payload: dict[str, object] = {
             'id': f'chatcmpl-{now}',
             'object': 'chat.completion',
             'created': now,
@@ -61,35 +58,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
         }
         self._send_json(200, payload)
-
-    def _send_openai_chat_stream(self, *, model: str, content: str) -> None:
-        now = int(time.time())
-        chunk_1 = {
-            'id': f'chatcmpl-{now}',
-            'object': 'chat.completion.chunk',
-            'created': now,
-            'model': model,
-            'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': content}, 'finish_reason': None}],
-        }
-        chunk_2 = {
-            'id': f'chatcmpl-{now}',
-            'object': 'chat.completion.chunk',
-            'created': now,
-            'model': model,
-            'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
-        }
-        body = (
-            f"data: {json.dumps(chunk_1, ensure_ascii=False)}\n\n"
-            f"data: {json.dumps(chunk_2, ensure_ascii=False)}\n\n"
-            "data: [DONE]\n\n"
-        ).encode('utf-8')
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
     def _send_raw_response(self, *, status: int, headers: dict[str, str], body: bytes) -> None:
         self.send_response(status)
@@ -113,10 +81,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             return '\n'.join(texts).strip()
         return ''
 
-    def _extract_prompt(self, payload: dict) -> str:
-        prompt = str(payload.get('prompt', '')).strip()
-        if prompt:
-            return prompt
+    def _extract_prompt(self, payload: dict[str, object]) -> str:
+        prompt_value = payload.get('prompt')
+        if isinstance(prompt_value, str) and prompt_value.strip():
+            return prompt_value.strip()
 
         messages = payload.get('messages')
         if isinstance(messages, list) and messages:
@@ -130,75 +98,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             if chunks:
                 return '\n'.join(chunks).strip()
         return 'ok'
-
-    def _configured_providers(self) -> list[str]:
-        statuses = self.service.provider_key_statuses()
-        return [name for name, status in statuses.items() if bool(status.get('configured'))]
-
-    def _resolve_provider_and_model(self, payload: dict) -> tuple[str | None, str | None, str | None]:
-        provider = str(payload.get('provider', '')).strip()
-        model = str(payload.get('model', '')).strip()
-        if not model:
-            return None, None, 'missing model'
-
-        if provider:
-            return provider, model, None
-
-        if model in {'auto', 'free-proxy/auto', 'free_proxy/auto'}:
-            return None, 'auto', None
-        if model in {'coding', 'free-proxy/coding', 'free_proxy/coding'}:
-            return None, 'coding', None
-
-        if '/' in model:
-            maybe_provider, maybe_model = model.split('/', 1)
-            if maybe_provider in self.known_providers and maybe_model:
-                return maybe_provider, maybe_model, None
-
-        configured = self._configured_providers()
-        if configured:
-            return configured[0], model, None
-        return None, None, 'no configured providers found, please save at least one API key first'
-
-    def _chat_auto(self, prompt: str) -> tuple[str | None, object, int]:
-        configured = self._configured_providers()
-        if not configured:
-            return None, {'message': 'no configured providers found, please save at least one API key first', 'type': 'invalid_request_error'}, 400
-
-        priority = ['longcat', 'gemini', 'github', 'mistral', 'sambanova', 'openrouter', 'groq', 'nvidia']
-        primary_provider = next((provider for provider in priority if provider in configured), configured[0])
-        candidates = ['auto', *get_provider_model_hints(primary_provider)]
-
-        last_result = None
-        for candidate in candidates[:2]:
-            result = self.service.chat(primary_provider, candidate, prompt)
-            if result.ok:
-                actual = result.actual_model or candidate
-                return f'{primary_provider}/{actual}', result, 200
-            last_result = result
-
-        if last_result is None:
-            return None, {'message': 'no available model found from configured providers', 'type': 'server_error'}, 502
-        return None, {'message': last_result.error or 'upstream error', 'type': last_result.category or 'server_error', 'code': last_result.status}, 502
-
-    def _chat_auto_raw(self, payload: dict) -> tuple[str | None, object, int]:
-        return self._chat_alias_raw('auto', payload)
-
-    def _chat_alias_raw(self, alias: str, payload: dict) -> tuple[str | None, object, int]:
-        configured = self._configured_providers()
-        if not configured:
-            return None, {'message': 'no configured providers found, please save at least one API key first', 'type': 'invalid_request_error'}, 400
-
-        last_result = None
-        candidates = self.service.resolve_alias_candidates(alias)
-        for provider, candidate in candidates:
-            result = self.service.chat_completions_raw(provider, candidate, payload)
-            if result.ok:
-                return f'{provider}/{candidate}', result, 200
-            last_result = result
-
-        if last_result is None:
-            return None, {'message': 'no available model found from configured providers', 'type': 'server_error'}, 502
-        return None, {'message': last_result.error or 'upstream error', 'type': last_result.category or 'server_error', 'code': last_result.status}, last_result.status or 502
 
     def _send_file(self, file_path: Path) -> None:
         if not file_path.exists() or not file_path.is_file():
@@ -280,11 +179,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._send_json(400, {'ok': False, 'error': 'invalid json'})
             return
+        if not isinstance(payload, dict):
+            self._send_json(400, {'ok': False, 'error': 'invalid json'})
+            return
 
         if parsed.path.startswith('/api/provider-keys/') and parsed.path.endswith('/verify'):
             provider = parsed.path.split('/')[3]
             result = self.service.verify_provider_key(provider)
-            self._send_json(200 if result.get('ok') else 400, result)
+            self._send_json(200 if bool(result.get('ok')) else 400, result)
             return
 
         if parsed.path == '/api/configure-openclaw':
@@ -294,7 +196,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
 
             statuses = self.service.provider_key_statuses()
-            has_any_configured = any(bool(v.get('configured')) for v in statuses.values())
+            has_any_configured = any(bool(item.get('configured')) for item in statuses.values())
             if not has_any_configured:
                 self._send_json(400, {'success': False, 'error': 'Please configure at least one provider API key first'})
                 return
@@ -306,7 +208,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 port = 8765
 
             result = configure_openclaw_model(mode, port=port)
-            if not result.get('success'):
+            if not bool(result.get('success')):
                 self._send_json(400, result)
                 return
 
@@ -316,7 +218,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == '/api/configure-opencode':
             statuses = self.service.provider_key_statuses()
-            has_any_configured = any(bool(v.get('configured')) for v in statuses.values())
+            has_any_configured = any(bool(item.get('configured')) for item in statuses.values())
             if not has_any_configured:
                 self._send_json(400, {'success': False, 'error': 'Please configure at least one provider API key first'})
                 return
@@ -328,7 +230,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 port = 8765
 
             result = configure_opencode_provider(port=port)
-            if not result.get('success'):
+            if not bool(result.get('success')):
                 self._send_json(400, result)
                 return
 
@@ -341,7 +243,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {'success': False, 'error': 'Backup filename is required'})
                 return
             result = restore_backup(backup)
-            if not result.get('success'):
+            if not bool(result.get('success')):
                 self._send_json(400, result)
                 return
             self._send_json(200, {'success': True, 'message': 'Restore successful'})
@@ -377,7 +279,6 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {'ok': False, 'error': 'missing provider or model'})
                 return
             prompt = self._extract_prompt(payload)
-
             result = self.service.chat(provider, model, prompt)
             if result.ok:
                 self._send_json(
@@ -406,39 +307,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == '/v1/chat/completions':
-            provider, model, error = self._resolve_provider_and_model(payload)
-            if error:
-                self._send_openai_error(400, error)
+            try:
+                target = self.service.resolve_openai_target(payload)
+            except ValueError as exc:
+                self._send_openai_error(400, str(exc))
                 return
 
-            prompt = self._extract_prompt(payload)
-            if model in {'auto', 'coding'} and provider is None:
-                resolved_model, raw_result, status = self._chat_alias_raw(str(model), payload)
-                if status != 200:
-                    self._send_openai_error(
-                        status,
-                        str(raw_result.get('message', 'upstream error')),
-                        error_type=str(raw_result.get('type', 'server_error')),
-                        code=str(raw_result.get('code', '')) or None,
-                    )
-                    return
-                self._send_raw_response(status=raw_result.status, headers=raw_result.headers, body=raw_result.body)
-                return
-
-            if provider != 'gemini':
-                raw = self.service.chat_completions_raw(str(provider), str(model), payload)
-                if raw.ok:
-                    self._send_raw_response(status=raw.status, headers=raw.headers, body=raw.body)
-                    return
-                self._send_openai_error(
-                    raw.status or 502,
-                    raw.error or 'upstream error',
-                    error_type=raw.category or 'server_error',
-                    code=str(raw.status) if raw.status else None,
-                )
-                return
-
-            result = self.service.chat(str(provider), str(model), prompt)
+            result = self.service.execute_openai_target(target, payload)
             if not result.ok:
                 self._send_openai_error(
                     result.status or 502,
@@ -448,8 +323,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            actual_model = result.actual_model or str(model)
-            self._send_openai_chat_success(model=f'{provider}/{actual_model}', content=result.content or '')
+            if result.body:
+                self._send_raw_response(status=result.status, headers=result.headers, body=result.body)
+                return
+
+            self._send_openai_chat_success(model=f'{result.provider}/{result.model}', content=result.content or '')
             return
 
         self._send_json(404, {'ok': False, 'error': 'not found'})

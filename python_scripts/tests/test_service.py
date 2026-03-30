@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from python_scripts.client import ProviderError
-from python_scripts.service import ProxyService, choose_candidates
+from python_scripts.provider_errors import ProviderError
+from python_scripts.service import OpenAIForwardResult, ProxyService, ResolvedOpenAIRequest
 
 
 class FakeTransport:
@@ -15,11 +15,19 @@ class FakeTransport:
         self.calls: list[tuple[str, str]] = []
         self.timeouts: list[int] = []
 
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, body
         self.calls.append((method, url))
         self.timeouts.append(timeout)
         if url.endswith('/models'):
-            return 200, {}, json.dumps({'data': [{'id': 'ok-model'}]}).encode()
+            return 200, {}, json.dumps({'data': [{'id': 'ok-model', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
 
 
@@ -29,14 +37,22 @@ class FallbackTransport:
         self.last_prompt: str = ''
         self.max_tokens: list[int] = []
 
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
-        if url.endswith('/models'):
-            return 200, {}, json.dumps({'data': [{'id': 'model-a'}, {'id': 'model-b'}]}).encode()
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, timeout
+        if method == 'GET' and url.endswith('/models'):
+            return 200, {}, json.dumps({'data': [{'id': 'model-a', 'pricing': {'prompt': '0', 'completion': '0'}}, {'id': 'model-b', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
 
         payload = json.loads((body or b'{}').decode('utf-8'))
-        model = payload.get('model', '')
+        model = str(payload.get('model', ''))
         self.chat_models.append(model)
-        self.last_prompt = payload.get('messages', [{}])[0].get('content', '')
+        self.last_prompt = str(payload.get('messages', [{}])[0].get('content', ''))
         self.max_tokens.append(int(payload.get('max_tokens', 0) or 0))
 
         if model == 'model-a':
@@ -45,28 +61,58 @@ class FallbackTransport:
 
 
 class VerifyTransport:
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
-        if url.endswith('/models'):
-            return 200, {}, json.dumps({'data': [{'id': 'v-model'}]}).encode()
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, body, timeout
+        if method == 'GET' and url.endswith('/models'):
+            return 200, {}, json.dumps({'data': [{'id': 'v-model', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
 
 
 class AuthFailTransport:
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
-        if url.endswith('/models'):
-            return 401, {}, json.dumps({'error': {'message': 'invalid api key'}}).encode()
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body, timeout
         return 401, {}, json.dumps({'error': {'message': 'invalid api key'}}).encode()
 
 
 class ListOkChatFailTransport:
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
-        if url.endswith('/models'):
-            return 200, {}, json.dumps({'data': [{'id': 'model-can-list'}]}).encode()
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, timeout
+        if method == 'GET' and url.endswith('/models'):
+            return 200, {}, json.dumps({'data': [{'id': 'model-can-list', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
         return 429, {}, json.dumps({'error': {'message': 'rate limit'}}).encode()
 
 
 class SslVerifyFailTransport:
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body, timeout
         raise ProviderError('网络连接失败: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1002)')
 
 
@@ -76,60 +122,93 @@ class TokenLimitRetryTransport:
         self.max_tokens: list[int] = []
         self.prompts: list[str] = []
 
-    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
-        if url.endswith('/models'):
-            return 200, {}, json.dumps({'data': [{'id': 'model-a'}]}).encode()
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, timeout
+        if method == 'GET' and url.endswith('/models'):
+            return 200, {}, json.dumps({'data': [{'id': 'model-a', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
         payload = json.loads((body or b'{}').decode('utf-8'))
         self.max_tokens.append(int(payload.get('max_tokens', 0) or 0))
-        self.prompts.append(payload.get('messages', [{}])[0].get('content', ''))
+        self.prompts.append(str(payload.get('messages', [{}])[0].get('content', '')))
         self.calls += 1
         if self.calls == 1:
             return 400, {}, json.dumps({'error': {'message': 'maximum context length is 8192 tokens'}}).encode()
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
 
 
+class RawTransport:
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, timeout
+        if method == 'GET' and url.endswith('/models'):
+            return 200, {}, json.dumps({'data': [{'id': 'model-a', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
+        payload = json.loads((body or b'{}').decode('utf-8'))
+        return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({'model': payload.get('model'), 'ok': True}).encode()
+
+
 class ServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._old = os.environ.get('OPENROUTER_API_KEY')
+        self.env_keys = [
+            'OPENROUTER_API_KEY',
+            'LONGCAT_API_KEY',
+            'GEMINI_API_KEY',
+            'SAMBANOVA_API_KEY',
+        ]
+        self.old_values = {key: os.environ.get(key) for key in self.env_keys}
         os.environ['OPENROUTER_API_KEY'] = 'test'
+        self.tmp = tempfile.TemporaryDirectory()
+        self.health_path = Path(self.tmp.name) / 'default-health.json'
+        self.token_limit_path = Path(self.tmp.name) / 'default-token-limits.json'
 
     def tearDown(self) -> None:
-        if self._old is None:
-            os.environ.pop('OPENROUTER_API_KEY', None)
-        else:
-            os.environ['OPENROUTER_API_KEY'] = self._old
+        for key, value in self.old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.tmp.cleanup()
+
+    def make_service(
+        self,
+        transport: object,
+        *,
+        dotenv_path: Path | None = None,
+        health_path: Path | None = None,
+        token_limit_path: Path | None = None,
+        request_timeout_seconds: int = 12,
+    ) -> ProxyService:
+        return ProxyService(
+            transport=transport,
+            dotenv_path=dotenv_path,
+            health_path=self.health_path if health_path is None else health_path,
+            token_limit_path=self.token_limit_path if token_limit_path is None else token_limit_path,
+            request_timeout_seconds=request_timeout_seconds,
+        )
 
     def test_probe_returns_ok(self) -> None:
-        service = ProxyService(transport=FakeTransport())
+        service = self.make_service(FakeTransport())
         result = service.probe('openrouter', 'ok-model')
         self.assertTrue(result.ok)
         self.assertEqual(result.content, 'ok')
         self.assertEqual(result.actual_model, 'ok-model')
 
-    def test_request_timeout_is_propagated_to_client_transport(self) -> None:
+    def test_request_timeout_is_propagated_to_adapter_transport(self) -> None:
         transport = FakeTransport()
-        service = ProxyService(transport=transport, request_timeout_seconds=7)
+        service = self.make_service(transport, request_timeout_seconds=7)
         service.probe('openrouter', 'ok-model')
         self.assertTrue(any(value == 7 for value in transport.timeouts))
-
-    def test_choose_candidates_prefers_recent_healthy_then_hints(self) -> None:
-        health = {
-            'openrouter/model-ok': {'ok': True, 'checked_at': 100},
-            'openrouter/model-old': {'ok': True, 'checked_at': 1},
-            'openrouter/model-bad': {'ok': False, 'checked_at': 100},
-        }
-        candidates = choose_candidates(
-            provider='openrouter',
-            requested_model='requested-model',
-            health=health,
-            hints=['model-ok', 'hint-model'],
-            now_ts=120,
-            ttl_seconds=30,
-        )
-        self.assertEqual(candidates[0], 'requested-model')
-        self.assertEqual(candidates[1], 'model-ok')
-        self.assertIn('hint-model', candidates)
-        self.assertNotIn('model-old', candidates)
 
     def test_chat_uses_trim_and_model_fallback(self) -> None:
         transport = FallbackTransport()
@@ -156,7 +235,7 @@ class ServiceTests(unittest.TestCase):
     def test_provider_key_status_and_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
-            service = ProxyService(transport=VerifyTransport(), dotenv_path=env_path)
+            service = self.make_service(VerifyTransport(), dotenv_path=env_path)
 
             before = service.provider_key_statuses()
             self.assertFalse(before['openrouter']['configured'])
@@ -173,7 +252,7 @@ class ServiceTests(unittest.TestCase):
     def test_verify_provider_key_and_recommended_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
-            service = ProxyService(transport=VerifyTransport(), dotenv_path=env_path)
+            service = self.make_service(VerifyTransport(), dotenv_path=env_path)
             service.save_provider_key('openrouter', 'sk-example-123456')
 
             verify = service.verify_provider_key('openrouter')
@@ -186,7 +265,7 @@ class ServiceTests(unittest.TestCase):
     def test_verify_provider_key_returns_error_category(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
-            service = ProxyService(transport=AuthFailTransport(), dotenv_path=env_path)
+            service = self.make_service(AuthFailTransport(), dotenv_path=env_path)
             service.save_provider_key('openrouter', 'sk-example-123456')
 
             verify = service.verify_provider_key('openrouter')
@@ -196,7 +275,7 @@ class ServiceTests(unittest.TestCase):
     def test_verify_provider_key_fails_when_model_list_ok_but_not_callable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
-            service = ProxyService(transport=ListOkChatFailTransport(), dotenv_path=env_path)
+            service = self.make_service(ListOkChatFailTransport(), dotenv_path=env_path)
             service.save_provider_key('openrouter', 'sk-example-123456')
 
             verify = service.verify_provider_key('openrouter')
@@ -207,7 +286,7 @@ class ServiceTests(unittest.TestCase):
     def test_verify_provider_key_classifies_ssl_certificate_failure_as_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
-            service = ProxyService(transport=SslVerifyFailTransport(), dotenv_path=env_path)
+            service = self.make_service(SslVerifyFailTransport(), dotenv_path=env_path)
             service.save_provider_key('longcat', 'lc-example-123456')
 
             verify = service.verify_provider_key('longcat')
@@ -216,39 +295,38 @@ class ServiceTests(unittest.TestCase):
             self.assertIn('检查网络', verify['suggestion'])
 
     def test_public_models_exposes_auto_and_coding_aliases(self) -> None:
-        service = ProxyService(transport=FakeTransport())
+        service = self.make_service(FakeTransport())
         models = service.public_models()
         ids = [item['id'] for item in models]
         self.assertIn('free-proxy/auto', ids)
         self.assertIn('free-proxy/coding', ids)
 
-    def test_resolve_alias_candidates_prefers_longcat_then_gemini_for_coding(self) -> None:
-        old_longcat = os.environ.get('LONGCAT_API_KEY')
-        old_gemini = os.environ.get('GEMINI_API_KEY')
-        old_sambanova = os.environ.get('SAMBANOVA_API_KEY')
+    def test_resolve_openai_target_supports_public_alias(self) -> None:
         os.environ['LONGCAT_API_KEY'] = 'test-longcat'
         os.environ['GEMINI_API_KEY'] = 'test-gemini'
-        os.environ['SAMBANOVA_API_KEY'] = 'test-sambanova'
-        try:
-            service = ProxyService(transport=FakeTransport())
-            candidates = service.resolve_alias_candidates('coding')
-            self.assertGreaterEqual(len(candidates), 2)
-            self.assertEqual(candidates[0], ('longcat', 'LongCat-Flash-Lite'))
-            self.assertEqual(candidates[1], ('gemini', 'gemini-3.1-flash-lite-preview'))
-            self.assertIn(('sambanova', 'DeepSeek-V3.1-Terminus'), candidates)
-        finally:
-            if old_longcat is None:
-                os.environ.pop('LONGCAT_API_KEY', None)
-            else:
-                os.environ['LONGCAT_API_KEY'] = old_longcat
-            if old_gemini is None:
-                os.environ.pop('GEMINI_API_KEY', None)
-            else:
-                os.environ['GEMINI_API_KEY'] = old_gemini
-            if old_sambanova is None:
-                os.environ.pop('SAMBANOVA_API_KEY', None)
-            else:
-                os.environ['SAMBANOVA_API_KEY'] = old_sambanova
+        service = self.make_service(FakeTransport())
+        target = service.resolve_openai_target({'model': 'free-proxy/coding'})
+        self.assertEqual(target, ResolvedOpenAIRequest(provider=None, model='coding', alias='coding'))
+
+    def test_execute_openai_target_returns_raw_forward_result_for_openai_provider(self) -> None:
+        service = self.make_service(RawTransport())
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored'})
+        self.assertEqual(
+            result,
+            OpenAIForwardResult(
+                ok=True,
+                provider='openrouter',
+                model='model-a',
+                status=200,
+                headers={'Content-Type': 'application/json; charset=utf-8'},
+                body=b'{"model": "model-a", "ok": true}',
+                content=None,
+                error=None,
+                category=None,
+                suggestion=None,
+            ),
+        )
 
     def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
         transport = TokenLimitRetryTransport()
