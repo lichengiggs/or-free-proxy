@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from .errors import classify_error
 from .provider_catalog import ProviderMeta, get_provider_model_hints, get_provider_required_query
@@ -17,6 +19,7 @@ class ProviderAdapter:
     api_key: str
     transport: Transport | None = None
     request_timeout_seconds: int = 12
+    debug_log: Callable[..., None] | None = None
 
     def __post_init__(self) -> None:
         if self.transport is None:
@@ -48,16 +51,41 @@ class ProviderAdapter:
         timeout: int | None = None,
     ) -> tuple[int, dict[str, str], object]:
         raw_body = json.dumps(payload, ensure_ascii=False).encode('utf-8') if payload is not None else None
+        timeout_value = timeout if timeout is not None else self._request_timeout_seconds_for_path(path)
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_request',
+                provider=self.provider.name,
+                model=payload.get('model') if isinstance(payload, dict) else 'none',
+                timeout_s=timeout_value,
+                auth_present=True,
+                auth_scheme='Bearer',
+                upstream_path=path,
+                query_keys=','.join(sorted(query.keys())) if query else 'none',
+            )
+        started_at = time.time()
         try:
             status, headers, raw = self.transport.request(
                 method,
                 build_url(self.provider.base_url, path, query),
                 self._headers(),
                 raw_body,
-                timeout if timeout is not None else self._request_timeout_seconds_for_path(path),
+                timeout_value,
             )
         except TimeoutError as exc:
             raise ProviderError(f'网络连接失败: {exc}') from exc
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_response',
+                provider=self.provider.name,
+                model=payload.get('model') if isinstance(payload, dict) else 'none',
+                status=status,
+                elapsed_ms=elapsed_ms,
+                content_type=headers.get('content-type', headers.get('Content-Type', '')) if isinstance(headers, dict) else '',
+                cf_ray=headers.get('cf-ray', 'none') if isinstance(headers, dict) else 'none',
+                retry_after=headers.get('retry-after', 'none') if isinstance(headers, dict) else 'none',
+            )
         if not raw:
             return status, headers, None
         text = raw.decode('utf-8', errors='ignore')
@@ -102,8 +130,20 @@ class ProviderAdapter:
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         model_value = payload.get('model')
         timeout = self._request_timeout_seconds_for_model(model_value) if isinstance(model_value, str) else self.request_timeout_seconds
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_request',
+                provider=self.provider.name,
+                model=model_value if isinstance(model_value, str) else 'none',
+                timeout_s=timeout,
+                auth_present=True,
+                auth_scheme='Bearer',
+                upstream_path='/chat/completions',
+                query_keys='none',
+            )
+        started_at = time.time()
         try:
-            return self.transport.request(
+            status, headers, response_body = self.transport.request(
                 'POST',
                 build_url(self.provider.base_url, '/chat/completions', get_provider_required_query(self.provider.name)),
                 self._headers(),
@@ -112,6 +152,19 @@ class ProviderAdapter:
             )
         except TimeoutError as exc:
             raise ProviderError(f'网络连接失败: {exc}') from exc
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_response',
+                provider=self.provider.name,
+                model=model_value if isinstance(model_value, str) else 'none',
+                status=status,
+                elapsed_ms=elapsed_ms,
+                content_type=headers.get('content-type', headers.get('Content-Type', '')) if isinstance(headers, dict) else '',
+                cf_ray=headers.get('cf-ray', 'none') if isinstance(headers, dict) else 'none',
+                retry_after=headers.get('retry-after', 'none') if isinstance(headers, dict) else 'none',
+            )
+        return status, headers, response_body
 
     def normalize_model_id(self, model_id: str) -> str:
         if self.provider.format == 'gemini' and model_id.startswith('models/'):

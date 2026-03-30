@@ -17,7 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='free-proxy Python backend')
     sub = parser.add_subparsers(dest='command', required=True)
 
-    sub.add_parser('serve', help='start HTTP backend')
+    serve_cmd = sub.add_parser('serve', help='start HTTP backend')
+    serve_cmd.add_argument('--debug', action='store_true')
 
     list_cmd = sub.add_parser('models', help='list provider models')
     list_cmd.add_argument('--provider', required=True)
@@ -37,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     service = ProxyService()
 
     if args.command == 'serve':
-        run()
+        run(debug=bool(getattr(args, 'debug', False)))
         return 0
 
     if args.command == 'providers':

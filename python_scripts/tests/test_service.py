@@ -343,3 +343,40 @@ class ServiceTests(unittest.TestCase):
             self.assertLess(transport.max_tokens[-1], transport.max_tokens[0])
             token_limits = json.loads((Path(tmp) / 'token-limits.json').read_text(encoding='utf-8'))
             self.assertEqual(token_limits['openrouter/model-a']['input_tokens_limit'], 8192)
+
+    def test_provider_adapter_logs_upstream_request_and_response_safely(self) -> None:
+        logs: list[tuple[str, dict[str, object]]] = []
+
+        def debug_log(event: str, **fields: object) -> None:
+            logs.append((event, fields))
+
+        transport = RawTransport()
+        service = ProxyService(transport=transport, debug_log=debug_log)
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        service.execute_openai_target(target, {'model': 'model-a', 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        events = [event for event, _ in logs]
+        self.assertIn('upstream_request', events)
+        self.assertIn('upstream_response', events)
+        first = logs[0][1]
+        self.assertEqual(first['auth_present'], True)
+        self.assertEqual(first['auth_scheme'], 'Bearer')
+        self.assertNotIn('Authorization', str(logs))
+        self.assertNotIn('hello', str(logs))
+
+    def test_execute_openai_target_logs_missing_provider_as_request_failure(self) -> None:
+        logs: list[tuple[str, dict[str, object]]] = []
+
+        def debug_log(event: str, **fields: object) -> None:
+            logs.append((event, fields))
+
+        class FailTransport(RawTransport):
+            def request(self, method: str, url: str, headers: dict[str, str] | None = None, body: bytes | None = None, timeout: int = 30) -> tuple[int, dict[str, str], bytes]:
+                del method, headers, body, timeout
+                return 403, {'cf-ray': 'ray-1'}, b'{"error":{"message":"error code: 1010"}}'
+
+        service = ProxyService(transport=FailTransport(), debug_log=debug_log)
+        result = service.execute_openai_target(ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None), {'model': 'model-a'})
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any(event == 'request_failed' for event, _ in logs))

@@ -21,6 +21,64 @@ from python_scripts.service import ProxyService
 class ApiHandler(BaseHTTPRequestHandler):
     service = ProxyService()
     web_root = Path(__file__).resolve().parent / 'web'
+    debug_enabled = False
+
+    @staticmethod
+    def _classify_user_agent(user_agent: str) -> str:
+        lowered = user_agent.lower()
+        if 'openclaw' in lowered:
+            return 'openclaw'
+        if 'opencode' in lowered:
+            return 'opencode'
+        if any(token in lowered for token in ('mozilla', 'chrome', 'safari', 'firefox', 'edge')):
+            return 'browser'
+        if user_agent:
+            return 'http_client'
+        return 'unknown'
+
+    def _debug_log(self, event: str, **fields: object) -> None:
+        if not self.debug_enabled:
+            return
+        parts = [f'event={event}']
+        for key, value in fields.items():
+            parts.append(f'{key}={value}')
+        print(' '.join(parts), file=sys.stderr, flush=True)
+
+    def _service_debug_log(self, event: str, **fields: object) -> None:
+        self._debug_log(event, **fields)
+
+    @staticmethod
+    def _payload_summary(payload: dict[str, object]) -> dict[str, object]:
+        messages = payload.get('messages')
+        summary: dict[str, object] = {
+            'messages': 0,
+            'system_messages': 0,
+            'user_messages': 0,
+            'prompt_chars': 0,
+            'stream': bool(payload.get('stream', False)),
+            'max_tokens': payload.get('max_tokens') or payload.get('max_completion_tokens') or payload.get('max_output_tokens') or 0,
+            'temperature': payload.get('temperature') if isinstance(payload.get('temperature'), (int, float)) else 0,
+        }
+        if isinstance(messages, list):
+            summary['messages'] = len(messages)
+            prompt_chars = 0
+            system_messages = 0
+            user_messages = 0
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                role = str(message.get('role', ''))
+                content = message.get('content')
+                if isinstance(content, str):
+                    prompt_chars += len(content)
+                if role == 'system':
+                    system_messages += 1
+                elif role == 'user':
+                    user_messages += 1
+            summary['prompt_chars'] = prompt_chars
+            summary['system_messages'] = system_messages
+            summary['user_messages'] = user_messages
+        return summary
 
     def _send_json(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -174,14 +232,42 @@ class ApiHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         length = int(self.headers.get('Content-Length', '0') or '0')
         body = self.rfile.read(length) if length > 0 else b'{}'
+        request_id = f'req_{int(time.time() * 1000)}'
+        user_agent_class = self._classify_user_agent(self.headers.get('User-Agent', ''))
+        client_addr = self.client_address[0] if self.client_address else 'unknown'
         try:
             payload = json.loads(body.decode('utf-8')) if body else {}
         except json.JSONDecodeError:
+            self._debug_log(
+                'request_failed',
+                request_id=request_id,
+                method='POST',
+                path=parsed.path,
+                category='invalid_request_error',
+                error='invalid json',
+            )
             self._send_json(400, {'ok': False, 'error': 'invalid json'})
             return
         if not isinstance(payload, dict):
+            self._debug_log(
+                'request_failed',
+                request_id=request_id,
+                method='POST',
+                path=parsed.path,
+                category='invalid_request_error',
+                error='invalid json',
+            )
             self._send_json(400, {'ok': False, 'error': 'invalid json'})
             return
+
+        self._debug_log(
+            'request_received',
+            request_id=request_id,
+            method='POST',
+            path=parsed.path,
+            client_addr=client_addr,
+            user_agent_class=user_agent_class,
+        )
 
         if parsed.path.startswith('/api/provider-keys/') and parsed.path.endswith('/verify'):
             provider = parsed.path.split('/')[3]
@@ -310,11 +396,40 @@ class ApiHandler(BaseHTTPRequestHandler):
             try:
                 target = self.service.resolve_openai_target(payload)
             except ValueError as exc:
+                self._debug_log(
+                    'request_failed',
+                    request_id=request_id,
+                    provider='free-proxy',
+                    model=str(payload.get('model', '')),
+                    category='invalid_request_error',
+                    error=str(exc),
+                )
                 self._send_openai_error(400, str(exc))
                 return
 
+            summary = self._payload_summary(payload)
+            self._debug_log(
+                'route_resolved',
+                request_id=request_id,
+                requested_model=str(payload.get('model', '')),
+                route_kind='alias' if target.alias is not None else 'direct',
+                resolved_provider=target.provider or 'free-proxy',
+                resolved_model=target.model,
+                resolved_via='default' if target.alias is not None else 'explicit',
+            )
+            self._debug_log('payload_summary', request_id=request_id, **summary)
             result = self.service.execute_openai_target(target, payload)
             if not result.ok:
+                self._debug_log(
+                    'request_failed',
+                    request_id=request_id,
+                    provider=result.provider,
+                    model=result.model,
+                    status=result.status,
+                    category=result.category,
+                    error=result.error or 'upstream error',
+                    suggestion=result.suggestion or 'none',
+                )
                 self._send_openai_error(
                     result.status or 502,
                     result.error or 'upstream error',
@@ -336,9 +451,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         return
 
 
-def run(host: str = '127.0.0.1', port: int = 8765) -> None:
+def run(host: str = '127.0.0.1', port: int = 8765, debug: bool = False) -> None:
+    ApiHandler.debug_enabled = debug
+    if debug:
+        def service_debug_log(event: str, **fields: object) -> None:
+            ApiHandler._debug_log(ApiHandler, event, **fields)
+
+        ApiHandler.service = ProxyService(debug_log=service_debug_log)
+    else:
+        ApiHandler.service = ProxyService()
     server = ThreadingHTTPServer((host, port), ApiHandler)
-    print(f'Python backend listening on http://{host}:{port}')
+    print(f'Python backend listening on http://{host}:{port}', file=sys.stderr if debug else sys.stdout, flush=True)
     server.serve_forever()
 
 

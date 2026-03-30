@@ -87,3 +87,10 @@ uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
 npm test -- --runInBand
 npx tsc --noEmit
 ```
+
+## 7. Debug 排障模式
+
+- 启动命令：`uv run free-proxy serve --debug`
+- 作用：把请求、路由、上游状态和错误分类打印到终端
+- 约束：不打印 API key、prompt 原文、message 内容、完整响应体
+- 适用场景：远程用户无法稳定复现，只能贴终端日志
