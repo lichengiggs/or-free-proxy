@@ -45,6 +45,30 @@ class TimeoutTransport:
         raise TimeoutError('The read operation timed out')
 
 
+class StreamingTransport:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, dict[str, str] | None, bytes | None, int]] = []
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        self.requests.append((method, url, headers, body, timeout))
+        return (
+            200,
+            {'content-type': 'text/event-stream; charset=utf-8'},
+            iter([
+                b'data: {"choices":[{"delta":{"reasoning_content":"think"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ]),
+        )
+
+
 class ClientTests(unittest.TestCase):
     def test_build_url_handles_slashes_and_query(self) -> None:
         self.assertEqual(
@@ -118,6 +142,30 @@ class ClientTests(unittest.TestCase):
         payload = json.loads((body or b'{}').decode('utf-8'))
         self.assertEqual(payload['max_tokens'], 256)
 
+    def test_openai_stream_chat_uses_stream_request(self) -> None:
+        provider = get_provider('openrouter')
+        transport = StreamingTransport()
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+
+        status, headers, chunks = adapter.chat_completions_stream({
+            'model': 'm1',
+            'messages': [{'role': 'user', 'content': 'hello'}],
+            'stream': True,
+        })
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get('content-type'), 'text/event-stream; charset=utf-8')
+        self.assertEqual(
+            list(chunks),
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"think"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
+        self.assertEqual(transport.requests[0][0], 'POST')
+        self.assertIn('/chat/completions', transport.requests[0][1])
+
     def test_openai_chat_raises_when_content_is_null(self) -> None:
         provider = get_provider('openrouter')
         transport = FakeTransport({
@@ -126,6 +174,18 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         with self.assertRaises(ProviderError):
             adapter.chat_text('a', 'ok')
+
+    def test_longcat_thinking_uses_reasoning_content_when_content_is_missing(self) -> None:
+        provider = get_provider('longcat')
+        transport = FakeTransport({
+            ('POST', 'https://api.longcat.chat/openai/chat/completions'): (
+                200,
+                {},
+                json.dumps({'choices': [{'message': {'role': 'assistant', 'reasoning_content': 'ok'}}]}).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok'), 'ok')
 
     def test_openrouter_only_keeps_free_or_zero_cost_models(self) -> None:
         provider = get_provider('openrouter')

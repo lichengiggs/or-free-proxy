@@ -71,6 +71,15 @@ class FakeService:
             return FakeResult(ok=True, actual_model=model, content=f'echo:{prompt}')
         return FakeResult(ok=False, error='provider not available', category='auth', status=401, suggestion='set key')
 
+    def forward_direct_chat(self, provider: str, model: str, payload: dict[str, object]) -> OpenAIForwardResult:
+        if payload.get('stream'):
+            body = (
+                'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"echo:hello"},"index":0}]}\n\n'
+                'data: [DONE]\n\n'
+            ).encode('utf-8')
+            return OpenAIForwardResult(ok=True, provider=provider, model=model, status=200, headers={'Content-Type': 'text/event-stream; charset=utf-8'}, body=b'', stream_chunks=[body])
+        return OpenAIForwardResult(ok=True, provider=provider, model=model, status=200, headers={'Content-Type': 'application/json; charset=utf-8'}, body=json.dumps({'choices': [{'message': {'role': 'assistant', 'content': 'echo:hello'}}]}).encode('utf-8'))
+
     def resolve_openai_target(self, payload: dict[str, object]) -> ResolvedOpenAIRequest:
         model = str(payload.get('model', '')).strip()
         if not model:
@@ -167,6 +176,27 @@ class ServerApiTests(unittest.TestCase):
         status = resp.status
         resp_headers = {key.lower(): value for key, value in resp.getheaders()}
         data = resp.read().decode('utf-8')
+        conn.close()
+        return status, resp_headers, data
+
+    def _request_raw_prefix(self, method: str, path: str, payload: dict[str, object] | None = None) -> tuple[int, dict[str, str], str]:
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        body = b''
+        headers: dict[str, str] = {}
+        if payload is not None:
+            body = json.dumps(payload).encode('utf-8')
+            headers['Content-Type'] = 'application/json'
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        status = resp.status
+        resp_headers = {key.lower(): value for key, value in resp.getheaders()}
+        parts: list[str] = []
+        for _ in range(4):
+            line = resp.readline().decode('utf-8', errors='ignore')
+            if not line:
+                break
+            parts.append(line)
+        data = ''.join(parts)
         conn.close()
         return status, resp_headers, data
 
@@ -276,6 +306,17 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('application/json', headers.get('content-type', ''))
         self.assertIn('openrouter/coding', body)
 
+    def test_openai_chat_completion_stream_mode_returns_sse_when_requested(self) -> None:
+        status, headers, body = self._request_raw(
+            'POST',
+            '/v1/chat/completions',
+            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('text/event-stream', headers.get('content-type', ''))
+        self.assertIn('data: [DONE]', body)
+        self.assertIn('chat.completion.chunk', body)
+
     def test_openai_chat_completion_stream_mode_returns_sse(self) -> None:
         status, headers, body = self._request_raw(
             'POST',
@@ -286,6 +327,16 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('text/event-stream', headers.get('content-type', ''))
         self.assertIn('data: [DONE]', body)
         self.assertIn('chat.completion.chunk', body)
+
+    def test_legacy_chat_completion_stream_mode_returns_sse(self) -> None:
+        status, headers, body = self._request_raw_prefix(
+            'POST',
+            '/chat/completions',
+            {'provider': 'openrouter', 'model': 'm1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('text/event-stream', headers.get('content-type', ''))
+        self.assertIn('data: ', body)
 
     def test_openai_chat_completion_wraps_gemini_text_result(self) -> None:
         status, body = self._request(

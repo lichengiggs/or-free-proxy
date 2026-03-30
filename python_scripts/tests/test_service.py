@@ -60,6 +60,28 @@ class FallbackTransport:
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
 
 
+class StreamTransport(FallbackTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream_payloads: list[dict[str, object]] = []
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del method, url, headers, timeout
+        payload = json.loads((body or b'{}').decode('utf-8'))
+        self.stream_payloads.append(payload)
+        return 200, {'Content-Type': 'text/event-stream; charset=utf-8'}, iter([
+            b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n',
+            b'data: [DONE]\n\n',
+        ])
+
+
 class VerifyTransport:
     def request(
         self,
@@ -210,26 +232,48 @@ class ServiceTests(unittest.TestCase):
         service.probe('openrouter', 'ok-model')
         self.assertTrue(any(value == 7 for value in transport.timeouts))
 
-    def test_chat_uses_trim_and_model_fallback(self) -> None:
+    def test_chat_is_strict_for_explicit_model(self) -> None:
         transport = FallbackTransport()
         with tempfile.TemporaryDirectory() as tmp:
             service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
             result = service.chat('openrouter', 'model-a', prompt='x' * 20000)
 
-            self.assertTrue(result.ok)
-            self.assertNotEqual(result.actual_model, 'model-a')
+            self.assertFalse(result.ok)
+            self.assertEqual(result.model, 'model-a')
+            self.assertEqual(result.status, 429)
+            self.assertEqual(result.category, 'rate_limit')
+            self.assertEqual(result.actual_model, None)
             self.assertEqual(transport.chat_models[0], 'model-a')
-            self.assertGreaterEqual(len(transport.chat_models), 2)
             self.assertIn('...[内容已截断]...', transport.last_prompt)
             self.assertEqual(transport.max_tokens[0], 512)
 
-    def test_probe_keeps_small_output_budget(self) -> None:
+    def test_stream_chat_wraps_prompt_into_messages_for_openai_payloads(self) -> None:
+        transport = StreamTransport()
+        with tempfile.TemporaryDirectory() as tmp:
+            service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
+            result = service.forward_direct_chat('openrouter', 'model-a', {'model': 'model-a', 'prompt': 'hello', 'stream': True})
+
+            self.assertTrue(result.ok)
+            self.assertIsNotNone(result.stream_chunks)
+            self.assertEqual(transport.stream_payloads[0]['messages'][0]['content'], 'hello')
+
+    def test_longcat_thinking_probe_uses_larger_output_budget(self) -> None:
+        transport = FallbackTransport()
+        with tempfile.TemporaryDirectory() as tmp:
+            service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
+            result = service.probe('longcat', 'LongCat-Flash-Thinking-2601')
+
+            self.assertTrue(result.ok)
+            self.assertEqual(transport.max_tokens[0], 256)
+
+    def test_probe_keeps_small_output_budget_for_non_thinking_models(self) -> None:
         transport = FallbackTransport()
         with tempfile.TemporaryDirectory() as tmp:
             service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
             result = service.probe('openrouter', 'model-a')
 
-            self.assertTrue(result.ok)
+            self.assertFalse(result.ok)
+            self.assertEqual(transport.chat_models, ['model-a'])
             self.assertEqual(transport.max_tokens[0], 32)
 
     def test_provider_key_status_and_save(self) -> None:

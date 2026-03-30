@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from .config import DOTENV_PATH, hydrate_env, load_dotenv
@@ -17,7 +17,7 @@ from .provider_routing import AliasName, PUBLIC_MODEL_ALIASES, ResolvedModelRequ
 from .provider_transport import Transport
 from .token_budgeting import resolve_token_budget, shrink_budget_after_limit_error
 from .token_limit_store import load_token_limits, upsert_token_limit
-from .token_policy import PROBE_OUTPUT_TOKENS, response_token_budget, trim_prompt
+from .token_policy import probe_output_tokens, response_token_budget, trim_prompt
 
 JsonObject = dict[str, object]
 
@@ -54,6 +54,7 @@ class OpenAIForwardResult:
     error: str | None = None
     category: str | None = None
     suggestion: str | None = None
+    stream_chunks: Iterable[bytes] | None = None
 
 
 class ProxyService:
@@ -216,25 +217,12 @@ class ProxyService:
         return self.provider_adapter(provider_name).list_models()
 
     def probe(self, provider_name: str, model_id: str) -> ProbeResult:
-        return self.chat(provider_name, model_id, prompt='ok', max_output_tokens=PROBE_OUTPUT_TOKENS)
+        return self.chat(provider_name, model_id, prompt='ok', max_output_tokens=probe_output_tokens(provider_name, model_id))
 
     def chat(self, provider_name: str, model_id: str, prompt: str, max_output_tokens: int | None = None) -> ProbeResult:
         adapter = self.provider_adapter(provider_name)
-        health = load_health(self.health_path)
         trimmed = trim_prompt(provider_name, prompt)
-        try:
-            listed_models = [model for model in adapter.list_models() if model != model_id]
-        except ProviderError:
-            listed_models = []
-        hints = listed_models or [model for model in get_provider_model_hints(provider_name) if model != model_id]
-        candidates = choose_candidates(
-            provider=provider_name,
-            requested_model=model_id,
-            health=health,
-            hints=hints,
-            now_ts=int(time.time()),
-            ttl_seconds=self.health_ttl_seconds,
-        )
+        candidates = [model_id]
 
         output_tokens = max_output_tokens if max_output_tokens is not None else response_token_budget(provider_name)
         learned_limits = load_token_limits(self.token_limit_path)
@@ -399,21 +387,69 @@ class ProxyService:
                     body=b'',
                     content=result.content,
                 )
-                return OpenAIForwardResult(
-                    ok=False,
-                    provider=provider_name,
-                    model=model_id,
-                    status=result.status or 502,
-                    headers={},
-                    body=b'',
-                    error=result.error,
-                    category=result.category,
-                    suggestion=result.suggestion,
-                )
+            return OpenAIForwardResult(
+                ok=False,
+                provider=provider_name,
+                model=model_id,
+                status=result.status or 502,
+                headers={},
+                body=b'',
+                error=result.error,
+                category=result.category,
+                suggestion=result.suggestion,
+            )
 
         adapter = self.provider_adapter(provider_name)
         request_payload = dict(payload)
         request_payload['model'] = model_id
+        if bool(request_payload.get('stream')):
+            if not isinstance(request_payload.get('messages'), list) or not request_payload.get('messages'):
+                prompt = self._extract_prompt(request_payload)
+                request_payload = dict(request_payload)
+                request_payload['messages'] = [{'role': 'user', 'content': prompt}]
+                request_payload.pop('prompt', None)
+            try:
+                status, headers, chunks = adapter.chat_completions_stream(request_payload)
+            except ProviderError as exc:
+                category = classify_error(0, str(exc)).category
+                return OpenAIForwardResult(
+                    ok=False,
+                    provider=provider_name,
+                    model=model_id,
+                    status=502,
+                    headers={},
+                    body=b'',
+                    error=str(exc),
+                    category=category,
+                    suggestion=remediation_suggestion(category, provider_name),
+                )
+
+            if status < 400:
+                return OpenAIForwardResult(ok=True, provider=provider_name, model=model_id, status=status, headers=headers, body=b'', stream_chunks=chunks)
+
+            text = b''.join(chunks).decode('utf-8', errors='ignore')
+            failure = classify_error(status, text)
+            if self.debug_log is not None:
+                self.debug_log(
+                    'request_failed',
+                    provider=provider_name,
+                    model=model_id,
+                    status=status,
+                    category=failure.category,
+                    error=text or f'upstream status {status}',
+                    suggestion=remediation_suggestion(failure.category, provider_name),
+                )
+            return OpenAIForwardResult(
+                ok=False,
+                provider=provider_name,
+                model=model_id,
+                status=status,
+                headers=headers,
+                body=b'',
+                error=text or f'upstream status {status}',
+                category=failure.category,
+                suggestion=remediation_suggestion(failure.category, provider_name),
+            )
         try:
             status, headers, body = adapter.chat_completions_raw(request_payload)
         except ProviderError as exc:

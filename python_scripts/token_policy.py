@@ -20,6 +20,7 @@ DEFAULT_POLICY = {
 }
 
 PROBE_OUTPUT_TOKENS = 32
+LONGCAT_THINKING_PROBE_OUTPUT_TOKENS = 256
 
 
 def trim_prompt(provider: str, text: str) -> str:
@@ -35,3 +36,9 @@ def trim_prompt(provider: str, text: str) -> str:
 def response_token_budget(provider: str) -> int:
     policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=4096))
     return policy.reserve_output_tokens
+
+
+def probe_output_tokens(provider: str, model: str) -> int:
+    if provider == 'longcat' and 'thinking' in model.lower():
+        return LONGCAT_THINKING_PROBE_OUTPUT_TOKENS
+    return PROBE_OUTPUT_TOKENS

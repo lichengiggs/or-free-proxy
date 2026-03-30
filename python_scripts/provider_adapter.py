@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from .errors import classify_error
 from .provider_catalog import ProviderMeta, get_provider_model_hints, get_provider_required_query
@@ -166,6 +166,48 @@ class ProviderAdapter:
             )
         return status, headers, response_body
 
+    def chat_completions_stream(self, payload: JsonObject) -> tuple[int, dict[str, str], Iterable[bytes]]:
+        if self.provider.format != 'openai':
+            raise ProviderError('provider is not openai-compatible')
+        body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        model_value = payload.get('model')
+        timeout = self._request_timeout_seconds_for_model(model_value) if isinstance(model_value, str) else self.request_timeout_seconds
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_request',
+                provider=self.provider.name,
+                model=model_value if isinstance(model_value, str) else 'none',
+                timeout_s=timeout,
+                auth_present=True,
+                auth_scheme='Bearer',
+                upstream_path='/chat/completions',
+                query_keys='none',
+            )
+        started_at = time.time()
+        try:
+            status, headers, chunks = self.transport.stream_request(
+                'POST',
+                build_url(self.provider.base_url, '/chat/completions', get_provider_required_query(self.provider.name)),
+                self._headers(),
+                body,
+                timeout,
+            )
+        except TimeoutError as exc:
+            raise ProviderError(f'网络连接失败: {exc}') from exc
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_response',
+                provider=self.provider.name,
+                model=model_value if isinstance(model_value, str) else 'none',
+                status=status,
+                elapsed_ms=elapsed_ms,
+                content_type=headers.get('content-type', headers.get('Content-Type', '')) if isinstance(headers, dict) else '',
+                cf_ray=headers.get('cf-ray', 'none') if isinstance(headers, dict) else 'none',
+                retry_after=headers.get('retry-after', 'none') if isinstance(headers, dict) else 'none',
+            )
+        return status, headers, chunks
+
     def normalize_model_id(self, model_id: str) -> str:
         if self.provider.format == 'gemini' and model_id.startswith('models/'):
             return model_id.removeprefix('models/')
@@ -268,6 +310,9 @@ class ProviderAdapter:
             content = message.get('content')
             if isinstance(content, str) and content.strip():
                 return content.strip()
+            reasoning_content = message.get('reasoning_content')
+            if isinstance(reasoning_content, str) and reasoning_content.strip():
+                return reasoning_content.strip()
             if isinstance(content, list):
                 chunks: list[str] = []
                 for item in content:

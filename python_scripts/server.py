@@ -5,6 +5,7 @@ import mimetypes
 import os
 import sys
 import time
+from collections.abc import Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +16,7 @@ if __package__ in (None, ''):
 from python_scripts.opencode_config import configure_opencode_provider, detect_opencode_config
 from python_scripts.openclaw_config import configure_openclaw_model, detect_openclaw_config, list_backups, restore_backup
 from python_scripts.provider_errors import ProviderError
+from python_scripts.provider_catalog import get_provider
 from python_scripts.service import ProxyService
 
 
@@ -124,6 +126,18 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_sse_response(self, *, status: int, chunks: Iterable[bytes]) -> None:
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.end_headers()
+        for raw in chunks:
+            if not raw:
+                continue
+            self.wfile.write(raw)
+            self.wfile.flush()
 
     @staticmethod
     def _message_to_text(value: object) -> str:
@@ -365,6 +379,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {'ok': False, 'error': 'missing provider or model'})
                 return
             prompt = self._extract_prompt(payload)
+            if bool(payload.get('stream')):
+                try:
+                    if get_provider(provider).format == 'openai':
+                        result = self.service.forward_direct_chat(provider, model, payload)
+                        if result.ok and result.stream_chunks is not None:
+                            self._send_sse_response(status=result.status, chunks=result.stream_chunks)
+                            return
+                except ProviderError as exc:
+                    self._send_json(400, {'ok': False, 'provider': provider, 'model': model, 'error': str(exc)})
+                    return
             result = self.service.chat(provider, model, prompt)
             if result.ok:
                 self._send_json(
@@ -436,6 +460,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                     error_type=result.category or 'server_error',
                     code=str(result.status) if result.status else None,
                 )
+                return
+
+            if bool(payload.get('stream')) and result.stream_chunks is not None:
+                self._send_sse_response(status=result.status, chunks=result.stream_chunks)
                 return
 
             if result.body:
