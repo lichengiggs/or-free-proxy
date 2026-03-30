@@ -3,8 +3,9 @@
 ## 1. 结论
 
 - 当前唯一运行主线：`python_scripts/`
-- 历史 TypeScript 方案不再参与运行与决策
-- 若需追溯旧设计，只看 `docs/typescript-legacy.md`
+- 历史 TypeScript 方案已清理，不再单独保留档案
+- 当前长期技术总览只有这一份文档
+- 文档路径：`docs/research.md`
 
 ## 2. 对外稳定面
 
@@ -75,8 +76,9 @@
 
 - provider key 保存后，通过 `verify_provider_key()` 先拉模型列表，再做真实 probe
 - probe 使用小输出预算，真实 chat 使用常规输出预算
-- token limit 错误会写入 `data/token-limits.json` 并自动重试一次
-- 健康状态会写入 `data/model-health.json`
+- token limit 错误会写入本地 `data/token-limits.json` 并自动重试一次
+- 健康状态会写入本地 `data/model-health.json`
+- 这两个文件是运行时状态，不入库
 
 ## 6. 验收命令
 

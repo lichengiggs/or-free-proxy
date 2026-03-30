@@ -219,8 +219,7 @@ npm test
 ## Legacy notes
 
 - The TypeScript backend is archived and no longer part of the runtime path; Python is the only active runtime entry now.
-- Legacy notes: `docs/typescript-legacy.md`
-- Migration notes: `docs/migration-python-mainline.md`
+- Long-term technical overview: `docs/research.md`
 
 ## License
 

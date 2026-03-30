@@ -69,7 +69,7 @@
   - `uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'`
   - `npm test`
   - `npx tsc --noEmit`
-- 清理中间文档（如 `plan.md`），保留并更新长期文档（`docs/research.md` / README）。
+- 清理中间文档（如 `plan.md`），保留并更新长期文档（`docs/research.md` / README）。运行时学习、探测、健康状态文件只做本地生成，不入库。
 
 ## Git 提交规范
 

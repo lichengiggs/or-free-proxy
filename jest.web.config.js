@@ -10,5 +10,6 @@ export default {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  testPathIgnorePatterns: ['<rootDir>/.worktrees/'],
   passWithNoTests: false,
 };

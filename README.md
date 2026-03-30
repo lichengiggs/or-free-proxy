@@ -219,8 +219,7 @@ npm test
 ## 历史说明
 
 - TypeScript 后端已归档并退出运行路径；当前唯一运行入口是 Python。
-- 历史说明：`docs/typescript-legacy.md`
-- 迁移说明：`docs/migration-python-mainline.md`
+- 长期技术总览：`docs/research.md`
 
 ## License
 

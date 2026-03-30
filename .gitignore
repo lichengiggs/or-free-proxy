@@ -11,3 +11,7 @@ rate-limit-state.json
 __pycache__/
 *.pyc
 .worktrees/
+# runtime state
+data/model-health.json
+data/token-limits.json
+output.log
