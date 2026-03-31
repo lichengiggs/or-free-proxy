@@ -108,6 +108,13 @@ class FakeService:
     def verify_provider_key(self, provider: str) -> dict[str, object]:
         return {'ok': True, 'provider': provider, 'verified_model': 'm1'}
 
+    def preferred_model(self) -> str | None:
+        return 'openrouter/m1'
+
+    def save_preferred_model(self, provider: str, model: str) -> dict[str, object]:
+        self.saved_keys.append((provider, model))
+        return {'ok': True, 'provider': provider, 'model': model, 'requested_model': f'{provider}/{model}'}
+
     def save_provider_key(self, provider: str, api_key: str) -> dict[str, object]:
         self.saved_keys.append((provider, api_key))
         return {'ok': True, 'provider': provider, 'masked': 'sk-o***1234'}
@@ -250,6 +257,16 @@ class ServerApiTests(unittest.TestCase):
         status, body = self._request('GET', '/api/provider-keys')
         self.assertEqual(status, 200)
         self.assertTrue(bool(body['openrouter']['configured']))
+
+    def test_preferred_model_route_returns_current_selection(self) -> None:
+        status, body = self._request('GET', '/api/preferred-model')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['requested_model'], 'openrouter/m1')
+
+    def test_preferred_model_route_persists_selection(self) -> None:
+        status, body = self._request('POST', '/api/preferred-model', {'provider': 'openrouter', 'model': 'm2'})
+        self.assertEqual(status, 200)
+        self.assertEqual(body['requested_model'], 'openrouter/m2')
 
     def test_openai_models_route_returns_public_aliases(self) -> None:
         status, body = self._request('GET', '/v1/models')

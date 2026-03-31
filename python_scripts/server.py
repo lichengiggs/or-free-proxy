@@ -225,6 +225,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(200, self.service.provider_key_statuses())
             return
 
+        if parsed.path == '/api/preferred-model':
+            current = self.service.preferred_model()
+            if current:
+                provider, model = current.split('/', 1)
+                self._send_json(200, {'ok': True, 'provider': provider, 'model': model, 'requested_model': current})
+            else:
+                self._send_json(200, {'ok': True, 'provider': None, 'model': None, 'requested_model': None})
+            return
+
         if parsed.path.startswith('/api/providers/') and parsed.path.endswith('/models/recommended'):
             provider = parsed.path.split('/')[3]
             query = parse_qs(parsed.query)
@@ -373,6 +382,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             try:
                 result = self.service.save_provider_key(provider, api_key)
+                self._send_json(200, result)
+            except ProviderError as exc:
+                self._send_json(400, {'ok': False, 'error': str(exc)})
+            return
+
+        if parsed.path == '/api/preferred-model':
+            provider = str(payload.get('provider', '')).strip()
+            model = str(payload.get('model', '')).strip()
+            if not provider or not model:
+                self._send_json(400, {'ok': False, 'error': 'missing provider or model'})
+                return
+            try:
+                result = self.service.save_preferred_model(provider, model)
                 self._send_json(200, result)
             except ProviderError as exc:
                 self._send_json(400, {'ok': False, 'error': str(exc)})

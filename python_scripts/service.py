@@ -12,6 +12,7 @@ from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
 from .health_store import load_health, upsert_health
 from .openai_relay import OpenAIRelay
+from .preferred_model_store import load_preferred_model, save_preferred_model
 from .provider_adapter import ProviderAdapter
 from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, list_providers
 from .provider_errors import ProviderError, ProviderHTTPError
@@ -66,6 +67,7 @@ class ProxyService:
         *,
         transport: Transport | None = None,
         health_path: Path | None = None,
+        preferred_model_path: Path | None = None,
         token_limit_path: Path | None = None,
         health_ttl_seconds: int = 600,
         dotenv_path: Path | None = None,
@@ -77,6 +79,7 @@ class ProxyService:
         hydrate_env(self.dotenv_path)
         self.transport = transport
         self.health_path = health_path
+        self.preferred_model_path = preferred_model_path
         self.token_limit_path = token_limit_path
         self.health_ttl_seconds = health_ttl_seconds
         self.request_timeout_seconds = request_timeout_seconds
@@ -108,9 +111,22 @@ class ProxyService:
             adapter_factory=self.provider_adapter,
             health_loader=lambda: load_health(self.health_path),
             health_updater=lambda provider, model, ok, reason=None: upsert_health(provider, model, ok, reason, path=self.health_path),
+            preferred_model_loader=lambda: load_preferred_model(self.preferred_model_path),
             health_ttl_seconds=self.health_ttl_seconds,
             configured_providers_loader=self.available_providers,
         )
+
+    def preferred_model(self) -> str | None:
+        return load_preferred_model(self.preferred_model_path)
+
+    def save_preferred_model(self, provider_name: str, model_id: str) -> dict[str, object]:
+        provider = get_provider(provider_name)
+        provider_name = provider.name
+        model_id = model_id.strip()
+        if not model_id:
+            raise ProviderError('model 不能为空')
+        save_preferred_model(provider_name, model_id, path=self.preferred_model_path)
+        return {'ok': True, 'provider': provider_name, 'model': model_id, 'requested_model': f'{provider_name}/{model_id}'}
 
     @staticmethod
     def _mask_key(value: str) -> str:
@@ -548,10 +564,12 @@ class ProxyService:
             )
 
         if status < 400:
+            upsert_health(provider_name, normalized_model_id, True, path=self.health_path)
             return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=body)
 
         text = body.decode('utf-8', errors='ignore')
         failure = classify_error(status, text)
+        upsert_health(provider_name, normalized_model_id, False, reason=failure.category, path=self.health_path)
         if self.debug_log is not None:
             self.debug_log(
                 'request_failed',

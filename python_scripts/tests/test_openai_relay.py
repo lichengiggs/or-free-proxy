@@ -262,6 +262,47 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertEqual(payload['max_tokens'], response_token_budget('openrouter'))
         self.assertFalse(bool(payload['stream']))
 
+    def test_relay_drops_old_history_when_context_exceeds_provider_budget(self) -> None:
+        class BudgetAwareAdapter:
+            def __init__(self) -> None:
+                self.payloads: list[dict[str, object]] = []
+
+            def forward_chat(self, payload: dict[str, object]):
+                self.payloads.append(payload)
+                return type(
+                    'AdapterResponse',
+                    (),
+                    {
+                        'status': 200,
+                        'headers': {'Content-Type': 'application/json; charset=utf-8'},
+                        'body': b'{"choices":[{"message":{"content":"ok"}}]}',
+                        'stream': None,
+                        'content_type': 'application/json; charset=utf-8',
+                    },
+                )()
+
+        adapter = BudgetAwareAdapter()
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: adapter,
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['openrouter'],
+        )
+        messages = [{'role': 'system', 'content': 's' * 1000}]
+        for index in range(1, 12):
+            messages.append({'role': 'user', 'content': f'u{index}:' + ('x' * 3000)})
+            messages.append({'role': 'assistant', 'content': f'a{index}:' + ('y' * 3000)})
+        request = ChatRequest('free-proxy/auto', None, messages, True, None, None, {'model': 'auto', 'messages': messages, 'stream': True})
+
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        payload = adapter.payloads[0]
+        self.assertLess(len(payload['messages']), len(messages))
+        self.assertEqual(payload['messages'][0]['role'], 'system')
+        self.assertEqual(payload['messages'][-1]['role'], 'assistant')
+        self.assertIn('a11:', str(payload['messages'][-1]['content']))
+
     def test_relay_prioritizes_longcat_for_interactive_clients(self) -> None:
         calls: list[tuple[str, str]] = []
 
@@ -308,7 +349,45 @@ class OpenAIRelayTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(calls[0][0], 'longcat')
-        self.assertEqual(calls[0][1], 'LongCat-Flash-Lite')
+        self.assertEqual(calls[0][1], 'LongCat-Flash-Chat')
+
+    def test_relay_prefers_saved_frontend_model_before_health_rankings(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        class OrderedAdapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                model = str(payload.get('model', ''))
+                calls.append((self.provider, model))
+                return type(
+                    'AdapterResponse',
+                    (),
+                    {
+                        'status': 200,
+                        'headers': {'Content-Type': 'application/json; charset=utf-8'},
+                        'body': b'{"choices":[{"message":{"content":"ok"}}]}',
+                        'stream': None,
+                        'content_type': 'application/json; charset=utf-8',
+                    },
+                )()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: OrderedAdapter(provider),
+            health_loader=lambda: {
+                'longcat/LongCat-Flash-Lite': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 9, 'failure_streak': 0},
+            },
+            preferred_model_loader=lambda: 'longcat/LongCat-Flash-Chat',
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['longcat'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
+
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls[0], ('longcat', 'LongCat-Flash-Chat'))
 
     def test_relay_records_health_on_success_and_failure(self) -> None:
         events: list[tuple[str, str, bool, str | None]] = []

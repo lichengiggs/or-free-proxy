@@ -6,13 +6,13 @@ from dataclasses import dataclass
 
 from .errors import classify_error
 from .fallback_policy import FallbackContext, decide_next_action
-from .provider_catalog import configured_provider_names, get_provider
+from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider
 from .provider_errors import ProviderError
 from .provider_routing import CandidateTarget, build_auto_candidates
 from .protocol_converter import gemini_json_to_openai_chat
 from .request_normalizer import ChatRequest, normalize_chat_request
 from .response_normalizer import RelayResponse, normalize_provider_response, sanitize_model_text
-from .token_policy import model_default_output_tokens, response_token_budget, trim_prompt
+from .token_policy import DEFAULT_POLICY, TokenPolicy, model_default_output_tokens, response_token_budget, trim_prompt
 
 
 @dataclass(frozen=True)
@@ -33,12 +33,14 @@ class OpenAIRelay:
         adapter_factory,
         health_loader,
         health_updater=None,
+        preferred_model_loader=None,
         health_ttl_seconds: int,
         configured_providers_loader=configured_provider_names,
     ) -> None:
         self.adapter_factory = adapter_factory
         self.health_loader = health_loader
         self.health_updater = health_updater
+        self.preferred_model_loader = preferred_model_loader
         self.health_ttl_seconds = health_ttl_seconds
         self.configured_providers_loader = configured_providers_loader
 
@@ -82,12 +84,83 @@ class OpenAIRelay:
                 trimmed['content'] = blocks
         return trimmed
 
+    @staticmethod
+    def _message_content_length(message: dict[str, object]) -> int:
+        content = message.get('content')
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total = 0
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get('text')
+                    if isinstance(text, str):
+                        total += len(text)
+            return total
+        return 0
+
+    @classmethod
+    def _trim_messages_for_provider(cls, provider: str, messages: list[dict[str, object]]) -> list[dict[str, object]]:
+        policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=256))
+        if not messages:
+            return []
+
+        trimmed_messages = [cls._trim_message_content(provider, message) for message in messages]
+        total_chars = sum(cls._message_content_length(message) for message in trimmed_messages)
+        if total_chars <= policy.max_input_chars:
+            return trimmed_messages
+
+        system_prefix: list[dict[str, object]] = []
+        tail: list[dict[str, object]] = []
+        prefix_done = False
+        for message in trimmed_messages:
+            role = str(message.get('role', '')).strip()
+            if not prefix_done and role == 'system':
+                system_prefix.append(message)
+                continue
+            prefix_done = True
+            tail.append(message)
+
+        system_budget = max(1024, policy.max_input_chars // 4)
+        tail_budget = max(1024, policy.max_input_chars - system_budget)
+        kept: list[dict[str, object]] = []
+
+        selected_tail: list[dict[str, object]] = []
+        remaining_tail_budget = tail_budget
+        for message in reversed(tail):
+            message_length = cls._message_content_length(message)
+            if selected_tail and remaining_tail_budget - message_length < 0:
+                continue
+            selected_tail.append(message)
+            remaining_tail_budget -= message_length
+            if remaining_tail_budget <= 0:
+                break
+
+        if not selected_tail and tail:
+            selected_tail.append(tail[-1])
+
+        remaining_system_budget = system_budget
+        for message in system_prefix:
+            message_length = cls._message_content_length(message)
+            if kept and remaining_system_budget - message_length < 0:
+                continue
+            kept.append(message)
+            remaining_system_budget -= message_length
+            if remaining_system_budget <= 0:
+                break
+
+        if not kept and system_prefix:
+            kept.append(system_prefix[0])
+
+        kept.extend(reversed(selected_tail))
+        return kept or trimmed_messages[-1:]
+
     def _payload_for_candidate(self, provider: str, model: str, request: ChatRequest) -> dict[str, object]:
         payload = dict(request.raw_payload)
         payload.pop('requested_model', None)
         payload['model'] = model
         payload['stream'] = False
-        payload['messages'] = [self._trim_message_content(provider, message) for message in request.messages]
+        payload['messages'] = self._trim_messages_for_provider(provider, request.messages)
         default_output = model_default_output_tokens(provider, model, response_token_budget(provider))
         requested_output = request.max_output_tokens if isinstance(request.max_output_tokens, int) and request.max_output_tokens > 0 else default_output
         payload['max_tokens'] = min(requested_output, default_output)
@@ -126,7 +199,11 @@ class OpenAIRelay:
         provider_priority = {'longcat': 0}
         return sorted(
             candidates,
-            key=lambda item: (provider_priority.get(item.provider, 1), item.rank),
+            key=lambda item: (
+                provider_priority.get(item.provider, 1),
+                -int(get_model_capabilities(item.provider, item.model).get('default_output_tokens', 0) or 0),
+                item.rank,
+            ),
         )
 
     def _append_provider_listed_candidate(self, candidates: list[CandidateTarget], provider: str, insert_at: int) -> list[CandidateTarget]:
@@ -183,13 +260,17 @@ class OpenAIRelay:
         return ''
 
     def handle_chat(self, request: ChatRequest) -> RelayResponse:
+        preferred_model = ''
+        if callable(self.preferred_model_loader):
+            preferred_model = str(self.preferred_model_loader() or '').strip()
+        requested_model = request.requested_model or (preferred_model if preferred_model else None)
         candidates = self._prioritize_interactive_clients(
             build_auto_candidates(
-            requested_model=request.requested_model,
-            configured=self.configured_providers_loader(),
-            health=self.health_loader(),
-            now_ts=int(time.time()),
-            ttl_seconds=self.health_ttl_seconds,
+                requested_model=requested_model,
+                configured=self.configured_providers_loader(),
+                health=self.health_loader(),
+                now_ts=int(time.time()),
+                ttl_seconds=self.health_ttl_seconds,
             ),
             request,
         )

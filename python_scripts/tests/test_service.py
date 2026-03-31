@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from python_scripts.health_store import load_health
 from python_scripts.provider_errors import ProviderError
 from python_scripts.service import OpenAIForwardResult, ProxyService, ResolvedOpenAIRequest
 
@@ -429,6 +430,20 @@ class ServiceTests(unittest.TestCase):
             self.assertTrue(after['longcat']['configured'])
             self.assertEqual(after['longcat']['env'], 'LONGCAT_API_KEY')
 
+    def test_save_and_load_preferred_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            preferred_path = Path(tmp) / 'preferred-model.json'
+            service = ProxyService(
+                transport=VerifyTransport(),
+                health_path=self.health_path,
+                preferred_model_path=preferred_path,
+                token_limit_path=self.token_limit_path,
+            )
+
+            result = service.save_preferred_model('longcat', 'LongCat-Flash-Chat')
+            self.assertTrue(result['ok'])
+            self.assertEqual(service.preferred_model(), 'longcat/LongCat-Flash-Chat')
+
     def test_verify_provider_key_and_recommended_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
@@ -537,6 +552,25 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIsNotNone(transport.last_payload)
         self.assertEqual(transport.last_payload and transport.last_payload.get('model'), 'stepfun/step-3.5-flash:free')
+
+    def test_forward_direct_chat_persists_successful_model_health(self) -> None:
+        transport = RawTransport()
+        with tempfile.TemporaryDirectory() as tmp:
+            service = ProxyService(
+                transport=transport,
+                health_path=Path(tmp) / 'health.json',
+                token_limit_path=self.token_limit_path,
+            )
+
+            result = service.forward_direct_chat(
+                'openrouter',
+                'model-a',
+                {'provider': 'openrouter', 'model': 'model-a', 'messages': [{'role': 'user', 'content': 'hello'}]},
+            )
+
+            self.assertTrue(result.ok)
+            health = load_health(Path(tmp) / 'health.json')
+            self.assertEqual(health['openrouter/model-a']['ok'], True)
 
     def test_execute_openai_target_ignores_stream_flag_for_openai_provider(self) -> None:
         transport = ChunkedStreamTransport()

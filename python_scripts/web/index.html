@@ -794,6 +794,19 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             return data;
         }
 
+        async function loadPreferredModel() {
+            try {
+                const data = await requestJson('/api/preferred-model');
+                if (data && data.provider && data.model) {
+                    state.selectedProvider = data.provider;
+                    state.selectedModel = data.model;
+                    persistSelection();
+                }
+            } catch (error) {
+                showToast(error.message || '加载已保存模型失败', 'error');
+            }
+        }
+
         function extractSseDataLine(part) {
             const lines = String(part || '').split('\n');
             for (const rawLine of lines) {
@@ -1232,7 +1245,7 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             }
         }
 
-        function chooseModel(providerId, modelId) {
+        async function chooseModel(providerId, modelId) {
             state.selectedProvider = providerId;
             state.selectedModel = modelId;
             state.activeProvider = providerId;
@@ -1243,6 +1256,15 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             refreshChatOptions();
             showToast(`已选择 ${providerId} / ${modelId}`);
             setDiagnostics('status-info', buildDiagnosticLines('选择验证模型', providerId, modelId, { ok: true }, '现在可以直接探测，或发送一条真实聊天请求。'));
+            try {
+                await requestJson('/api/preferred-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: providerId, model: modelId }),
+                });
+            } catch (error) {
+                showToast(error.message || '保存已选模型失败', 'error');
+            }
         }
 
         async function probeModel(providerId, modelId, button) {
@@ -1256,7 +1278,7 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: modelId }),
                 });
-                chooseModel(providerId, modelId);
+                await chooseModel(providerId, modelId);
                 showToast('模型探测成功');
                 setDiagnostics('status-success', buildDiagnosticLines('探测模型', providerId, modelId, { ...data, ok: true }, '模型可用，可以继续发送聊天请求。'));
             } catch (error) {
@@ -1320,7 +1342,7 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                         actual_model: modelId,
                     }, '结果仍在生成中。'));
                 });
-                chooseModel(providerId, modelId);
+                await chooseModel(providerId, modelId);
                 setDiagnostics('status-success', buildDiagnosticLines('聊天测试', providerId, modelId, { ok: true, content: data || content, actual_model: modelId }, '结果已返回，可以继续调整 prompt 复测。'));
             } catch (error) {
                 const payload = error.payload || {};
@@ -1506,7 +1528,7 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                 return;
             }
             if (button.dataset.action === 'choose-model') {
-                chooseModel(providerId, modelId);
+                await chooseModel(providerId, modelId);
                 return;
             }
             if (button.dataset.action === 'probe-model') {
@@ -1575,6 +1597,7 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
 
         async function bootstrap(forceModels = false) {
             await loadStatuses();
+            await loadPreferredModel();
             await ensureVisibleModels(forceModels);
             await checkOpenClawStatus();
             setDiagnostics('status-info', [
