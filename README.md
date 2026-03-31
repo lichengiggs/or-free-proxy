@@ -87,7 +87,7 @@ uv run free-proxy serve
 uv run free-proxy serve --debug
 ```
 
-## 流式验证注意事项
+## 本地代理注意事项
 
 如果你本机 shell 配了 `http_proxy` / `https_proxy`，验证本地服务时请同时设置：
 
@@ -97,7 +97,7 @@ NO_PROXY=127.0.0.1,localhost
 
 或者临时清空代理变量再测。
 
-否则 `curl`、`opencode` 之类的客户端可能经过本地代理，看到代理注入的 `Connection: keep-alive` / `Proxy-Connection: keep-alive`，误判成 SSE 没有正常结束。
+否则 `curl`、`opencode` 之类的客户端可能经过本地代理，导致本地回环请求异常。
 
 ## OpenAI 兼容调用示例
 
@@ -109,13 +109,33 @@ curl -s -X POST http://127.0.0.1:8765/v1/chat/completions \
   -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}]}'
 ```
 
-流式验证时建议显式跳过代理：
+`/v1/chat/completions` 的当前行为是：
+
+- 默认返回普通 JSON
+- 如果请求里带 `"stream": true`，服务端会把完整结果包装成最小 SSE 返回，兼容 `opencode` 这类按流式消费的客户端
+
+普通 JSON 示例：
+
+```bash
+curl -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}]}'
+```
+
+SSE 示例：
 
 ```bash
 NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= \
 curl -N -X POST http://127.0.0.1:8765/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}],"stream":true}'
+```
+
+如果你用 `opencode run` 验证本地服务，建议同样清空代理变量：
+
+```bash
+NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= \
+opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly OK"
 ```
 
 ## 常见问题

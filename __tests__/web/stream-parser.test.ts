@@ -53,4 +53,36 @@ describe('web stream parser', () => {
     expect(seen).toBe('OK');
     expect(result).toBe('OK');
   });
+
+  test('requestStream extracts assistant text from json fallback responses', async () => {
+    const source = `${extractHelpers()} return requestStream;`;
+    const factory = new Function(source);
+    const requestStream = factory() as (url: string, options?: object, onChunk?: (chunk: string, fullText: string) => void) => Promise<string>;
+
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      headers: { get: () => 'application/json; charset=utf-8' },
+      body: null,
+      text: async () => JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: 'answer-json',
+          },
+        }],
+      }),
+      json: async () => ({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: 'answer-json',
+          },
+        }],
+      }),
+    })) as unknown as typeof fetch;
+
+    const result = await requestStream('/chat/completions');
+
+    expect(result).toBe('answer-json');
+  });
 });

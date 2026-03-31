@@ -30,6 +30,33 @@ class ProviderRoutingTests(unittest.TestCase):
         candidates = resolve_alias_candidates('auto', configured=['longcat', 'gemini', 'openrouter'])
         self.assertEqual(candidates[:2], [('longcat', 'LongCat-Flash-Lite'), ('gemini', 'gemini-3.1-flash-lite-preview')])
 
+    def test_auto_candidates_start_with_longcat_when_available(self) -> None:
+        target = resolve_model_request(
+            model='free-proxy/auto',
+            provider=None,
+            configured=['longcat', 'gemini', 'github'],
+            known_providers={'longcat', 'gemini', 'github'},
+        )
+        self.assertEqual(target.alias, 'auto')
+
+        items = build_auto_candidates(
+            requested_model=target.model,
+            configured=['longcat', 'gemini', 'github'],
+            health={},
+            now_ts=150,
+            ttl_seconds=60,
+        )
+
+        self.assertGreaterEqual(len(items), 3)
+        self.assertEqual(
+            [(item.provider, item.model) for item in items[:3]],
+            [
+                ('longcat', 'LongCat-Flash-Lite'),
+                ('gemini', 'gemini-3.1-flash-lite-preview'),
+                ('github', 'gpt-4o-mini'),
+            ],
+        )
+
     def test_build_auto_candidates_prefers_requested_then_health_then_hints(self) -> None:
         health = {
             'longcat/LongCat-Flash-Lite': {'ok': True, 'checked_at': 120},
@@ -46,7 +73,7 @@ class ProviderRoutingTests(unittest.TestCase):
             [
                 CandidateTarget('longcat', 'LongCat-Flash-Chat', 'user_requested', 0),
                 CandidateTarget('longcat', 'LongCat-Flash-Lite', 'health_boosted', 1),
-                CandidateTarget('openrouter', 'openrouter/auto:free', 'provider_default', 2),
+                CandidateTarget('openrouter', 'openrouter/auto:free', 'static_fallback_order', 2),
             ],
         )
 

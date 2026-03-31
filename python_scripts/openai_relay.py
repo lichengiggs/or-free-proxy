@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from .errors import classify_error
 from .fallback_policy import FallbackContext, decide_next_action
 from .provider_catalog import configured_provider_names, get_provider
+from .provider_errors import ProviderError
 from .provider_routing import CandidateTarget, build_auto_candidates
 from .protocol_converter import gemini_json_to_openai_chat
 from .request_normalizer import ChatRequest, normalize_chat_request
-from .response_normalizer import RelayResponse, normalize_json_success, normalize_stream_success
+from .response_normalizer import RelayResponse, normalize_json_success, normalize_sse_success
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ class OpenAIRelay:
         payload = dict(request.raw_payload)
         payload.pop('requested_model', None)
         payload['model'] = model
-        payload['stream'] = request.stream
+        payload['stream'] = False
         adapter_response = adapter.forward_chat(payload)
         if get_provider(provider).format == 'gemini' and adapter_response.status < 400 and adapter_response.body is not None:
             body = adapter_response.body or b''
@@ -77,6 +78,39 @@ class OpenAIRelay:
         ordered.insert(insert_at, CandidateTarget(provider, listed_model, 'provider_default', insert_at))
         return [CandidateTarget(item.provider, item.model, item.source, rank) for rank, item in enumerate(ordered)]
 
+    @staticmethod
+    def _extract_openai_text(parsed: object) -> str:
+        if not isinstance(parsed, dict):
+            return ''
+        choices = parsed.get('choices')
+        if not isinstance(choices, list) or not choices:
+            return ''
+        first = choices[0]
+        if not isinstance(first, dict):
+            return ''
+        message = first.get('message')
+        if isinstance(message, dict):
+            raw_content = message.get('content')
+            if isinstance(raw_content, str) and raw_content.strip():
+                return raw_content.strip()
+            reasoning = message.get('reasoning_content')
+            if isinstance(reasoning, str) and reasoning.strip():
+                return reasoning.strip()
+            if isinstance(raw_content, list):
+                chunks: list[str] = []
+                for item in raw_content:
+                    if isinstance(item, dict):
+                        text = item.get('text')
+                        if isinstance(text, str) and text.strip():
+                            chunks.append(text.strip())
+                merged = '\n'.join(chunks).strip()
+                if merged:
+                    return merged
+        text = first.get('text')
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+        return ''
+
     def handle_chat(self, request: ChatRequest) -> RelayResponse:
         candidates = build_auto_candidates(
             requested_model=request.requested_model,
@@ -97,23 +131,19 @@ class OpenAIRelay:
             else:
                 same_provider_attempts = 0
                 current_provider = candidate.provider
-            adapter_response = self._adapter_response(candidate.provider, candidate.model, request)
+            try:
+                adapter_response = self._adapter_response(candidate.provider, candidate.model, request)
+            except ProviderError as exc:
+                failure = classify_error(0, str(exc))
+                decision = decide_next_action(FallbackContext(index, same_provider_attempts), RelayAttemptResult(False, candidate.provider, candidate.model, failure.category, None, None, str(exc)))
+                if decision.action == 'stop':
+                    break
+                continue
             if adapter_response.status < 400:
-                if request.stream:
-                    if adapter_response.stream is not None:
-                        return RelayResponse(200, {'Content-Type': 'text/event-stream; charset=utf-8'}, None, adapter_response.stream)
-                    return normalize_stream_success(provider=candidate.provider, model=candidate.model, body=adapter_response.body or b'', content_type=str(adapter_response.headers.get('Content-Type', '')))
                 parsed = json.loads((adapter_response.body or b'{}').decode('utf-8'))
-                content = ''
-                choices = parsed.get('choices')
-                if isinstance(choices, list) and choices:
-                    first = choices[0]
-                    if isinstance(first, dict):
-                        message = first.get('message')
-                        if isinstance(message, dict):
-                            raw_content = message.get('content')
-                            if isinstance(raw_content, str):
-                                content = raw_content
+                content = self._extract_openai_text(parsed)
+                if request.stream and adapter_response.body is not None:
+                    return normalize_sse_success(provider=candidate.provider, model=candidate.model, body=adapter_response.body)
                 return normalize_json_success(provider=candidate.provider, model=candidate.model, content=content)
             failure = classify_error(adapter_response.status, (adapter_response.body or b'').decode('utf-8', errors='ignore'))
             if candidate.provider not in listed_loaded:

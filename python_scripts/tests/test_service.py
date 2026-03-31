@@ -252,6 +252,21 @@ class StreamHttpTransport:
         ])
 
 
+class LongcatThinkingTransport(StreamHttpTransport):
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        self.requests.append((method, url, headers, body, timeout))
+        return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({
+            'choices': [{'message': {'role': 'assistant', 'content': 'ok'}}],
+        }).encode('utf-8')
+
+
 class LongcatFallbackTransport(StreamHttpTransport):
     def request(
         self,
@@ -364,15 +379,19 @@ class ServiceTests(unittest.TestCase):
             self.assertIn('...[内容已截断]...', transport.last_prompt)
             self.assertEqual(transport.max_tokens[0], 512)
 
-    def test_stream_chat_wraps_prompt_into_messages_for_openai_payloads(self) -> None:
-        transport = StreamTransport()
+    def test_stream_chat_ignores_stream_and_wraps_prompt_into_messages_for_openai_payloads(self) -> None:
+        transport = RawTransport()
         with tempfile.TemporaryDirectory() as tmp:
             service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
             result = service.forward_direct_chat('openrouter', 'model-a', {'model': 'model-a', 'prompt': 'hello', 'stream': True})
 
             self.assertTrue(result.ok)
-            self.assertIsNotNone(result.stream_chunks)
-            self.assertEqual(transport.stream_payloads[0]['messages'][0]['content'], 'hello')
+            self.assertIsNone(result.stream_chunks)
+            self.assertIsNotNone(result.body)
+            parsed = json.loads((result.body or b'{}').decode('utf-8'))
+            self.assertTrue(bool(parsed.get('ok')))
+            self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), False)
+            self.assertEqual(transport.last_payload and transport.last_payload.get('messages'), [{'role': 'user', 'content': 'hello'}])
 
     def test_longcat_thinking_probe_uses_larger_output_budget(self) -> None:
         transport = FallbackTransport()
@@ -519,41 +538,16 @@ class ServiceTests(unittest.TestCase):
         self.assertIsNotNone(transport.last_payload)
         self.assertEqual(transport.last_payload and transport.last_payload.get('model'), 'stepfun/step-3.5-flash:free')
 
-    def test_execute_openai_target_streams_chunked_sse_for_openai_provider(self) -> None:
+    def test_execute_openai_target_ignores_stream_flag_for_openai_provider(self) -> None:
         transport = ChunkedStreamTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
         result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
-        self.assertIsNotNone(result.stream_chunks)
-        self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), True)
-        self.assertEqual(
-            list(result.stream_chunks or []),
-            [
-                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
-                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
-                b'data: [DONE]\n\n',
-            ],
-        )
-
-    def test_execute_openai_target_streams_http_transport_events_for_openai_provider(self) -> None:
-        transport = StreamHttpTransport()
-        service = self.make_service(transport)
-        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
-
-        self.assertTrue(result.ok)
-        self.assertIsNotNone(result.stream_chunks)
-        self.assertEqual(len(transport.requests), 1)
-        self.assertEqual(
-            list(result.stream_chunks or []),
-            [
-                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
-                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
-                b'data: [DONE]\n\n',
-            ],
-        )
+        self.assertIsNone(result.stream_chunks)
+        self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), False)
+        self.assertIsNotNone(result.body)
 
     def test_execute_openai_target_clamps_longcat_thinking_output_budget(self) -> None:
         transport = StreamHttpTransport()
@@ -568,67 +562,50 @@ class ServiceTests(unittest.TestCase):
         body = json.loads(bytes(payload).decode('utf-8'))
         self.assertLessEqual(int(body['max_tokens']), 1024)
 
-    def test_execute_openai_target_streams_longcat_thinking_when_upstream_supports_stream(self) -> None:
+    def test_execute_openai_target_ignores_stream_flag_for_longcat_thinking(self) -> None:
         transport = StreamHttpTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
         result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
-        self.assertIsNotNone(result.stream_chunks)
-        self.assertEqual(
-            list(result.stream_chunks or []),
-            [
-                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
-                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
-                b'data: [DONE]\n\n',
-            ],
-        )
+        self.assertIsNone(result.stream_chunks)
+        self.assertEqual(len(transport.requests), 1)
+        payload = transport.requests[0][3]
+        self.assertIsInstance(payload, (bytes, bytearray))
+        body = json.loads(bytes(payload).decode('utf-8'))
+        self.assertEqual(body['stream'], False)
 
-    def test_execute_openai_target_uses_stream_transport_even_when_capability_marks_model_non_streaming(self) -> None:
+    def test_execute_openai_target_uses_non_stream_transport_when_stream_requested(self) -> None:
         transport = StreamHttpTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
         result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
-        self.assertIsNotNone(result.stream_chunks)
+        self.assertIsNone(result.stream_chunks)
         self.assertEqual(len(transport.requests), 1)
 
-    def test_execute_openai_target_wraps_non_sse_stream_response_into_sse(self) -> None:
-        transport = JsonFallbackStreamTransport()
-        service = self.make_service(transport)
-        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+    def test_execute_openai_target_uses_extended_timeout_for_longcat_thinking(self) -> None:
+        transport = LongcatThinkingTransport()
+        service = self.make_service(transport, request_timeout_seconds=12)
+        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
+
+        result = service.execute_openai_target(target, {'model': 'ignored', 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
         self.assertEqual(len(transport.requests), 1)
-        self.assertIsNotNone(result.stream_chunks)
-        self.assertEqual(
-            list(result.stream_chunks or []),
-            [
-                b'data: {"id":"chatcmpl-stream-json","object":"chat.completion.chunk","created":2,"model":"model-a","choices":[{"index":0,"delta":{"role":"assistant","content":"answer-json"},"finish_reason":null}]}\n\n',
-                b'data: {"id":"chatcmpl-stream-json","object":"chat.completion.chunk","created":2,"model":"model-a","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
-                b'data: [DONE]\n\n',
-            ],
-        )
+        self.assertGreaterEqual(transport.requests[0][4], 60)
 
-    def test_execute_openai_target_wraps_non_openai_provider_stream_into_sse(self) -> None:
+    def test_execute_openai_target_ignores_stream_flag_for_non_openai_provider(self) -> None:
         transport = GeminiTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='gemini', model='gemini-2.0-flash', alias=None)
         result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
-        self.assertIsNotNone(result.stream_chunks)
-        self.assertEqual(
-            list(result.stream_chunks or []),
-            [
-                b'data: {"id":"chatcmpl-free-proxy","object":"chat.completion.chunk","created":1,"model":"gemini/gemini-2.0-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"gemini-ok"},"finish_reason":null}]}\n\n',
-                b'data: {"id":"chatcmpl-free-proxy","object":"chat.completion.chunk","created":1,"model":"gemini/gemini-2.0-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
-                b'data: [DONE]\n\n',
-            ],
-        )
+        self.assertIsNone(result.stream_chunks)
+        self.assertEqual(result.content, 'gemini-ok')
 
     def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
         transport = TokenLimitRetryTransport()

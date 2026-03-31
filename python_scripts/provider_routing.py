@@ -104,13 +104,13 @@ def build_auto_candidates(*, requested_model: str | None, configured: list[str],
         provider_name, model_id = key.split('/', 1)
         push(provider_name, model_id, 'health_boosted')
 
+    for provider_name, model_id in STATIC_AUTO_FALLBACK:
+        push(provider_name, model_id, 'static_fallback_order')
+
     for provider_name in configured:
         hints = get_provider_model_hints(provider_name)
         if hints:
             push(provider_name, hints[0], 'provider_default')
-
-    for provider_name, model_id in STATIC_AUTO_FALLBACK:
-        push(provider_name, model_id, 'static_fallback_order')
 
     return ordered
 

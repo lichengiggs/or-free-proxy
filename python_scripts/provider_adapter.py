@@ -304,6 +304,8 @@ class ProviderAdapter:
         capabilities = get_model_capabilities(self.provider.name, model_id)
         timeout_value = capabilities.get('default_timeout_seconds')
         if isinstance(timeout_value, int) and timeout_value > 0:
+            if capabilities.get('long_running') is True:
+                return max(self.request_timeout_seconds, timeout_value * 2)
             return max(self.request_timeout_seconds, timeout_value)
         return self.request_timeout_seconds
 

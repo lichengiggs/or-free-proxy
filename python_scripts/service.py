@@ -422,53 +422,6 @@ class ProxyService:
         )
         yield from self._sse_done_chunk()
 
-    def _wrap_text_as_sse(self, *, model: str, content: str) -> Iterable[bytes]:
-        chunk_id = 'chatcmpl-free-proxy'
-        created = 1
-        if content:
-            yield self._sse_json_line(
-                {
-                    'id': chunk_id,
-                    'object': 'chat.completion.chunk',
-                    'created': created,
-                    'model': model,
-                    'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': content}, 'finish_reason': None}],
-                }
-            )
-        yield self._sse_json_line(
-            {
-                'id': chunk_id,
-                'object': 'chat.completion.chunk',
-                'created': created,
-                'model': model,
-                'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
-            }
-        )
-        yield from self._sse_done_chunk()
-
-    def _normalize_stream_result(
-        self,
-        *,
-        provider: str,
-        model: str,
-        status: int,
-        headers: dict[str, str],
-        chunks: Iterable[bytes],
-    ) -> OpenAIForwardResult:
-        content_type = self._content_type(headers)
-        if 'text/event-stream' in content_type:
-            return OpenAIForwardResult(ok=True, provider=provider, model=model, status=status, headers=headers, body=b'', stream_chunks=chunks)
-        body = b''.join(chunks)
-        return OpenAIForwardResult(
-            ok=True,
-            provider=provider,
-            model=model,
-            status=status,
-            headers={'Content-Type': 'text/event-stream; charset=utf-8'},
-            body=b'',
-            stream_chunks=self._wrap_openai_body_as_sse(model, body),
-        )
-
     def execute_openai_target(self, target: ResolvedOpenAIRequest, payload: JsonObject) -> OpenAIForwardResult:
         if target.alias is not None:
             return self.forward_alias_chat(target.alias, payload)
@@ -525,16 +478,6 @@ class ProxyService:
             result = self.chat(provider_name, model_id, prompt, max_output_tokens=requested_output_tokens)
             if result.ok:
                 actual_model = result.actual_model or model_id
-                if bool(payload.get('stream')):
-                    return OpenAIForwardResult(
-                        ok=True,
-                        provider=provider_name,
-                        model=actual_model,
-                        status=200,
-                        headers={'Content-Type': 'text/event-stream; charset=utf-8'},
-                        body=b'',
-                        stream_chunks=self._wrap_text_as_sse(model=f'{provider_name}/{actual_model}', content=result.content or ''),
-                    )
                 return OpenAIForwardResult(
                     ok=True,
                     provider=provider_name,
@@ -575,49 +518,7 @@ class ProxyService:
         if not isinstance(request_payload.get('messages'), list) or not request_payload.get('messages'):
             request_payload['messages'] = [{'role': 'user', 'content': budget.trimmed_prompt}]
             request_payload.pop('prompt', None)
-        if bool(request_payload.get('stream')):
-            try:
-                status, headers, chunks = adapter.chat_completions_stream(request_payload)
-            except ProviderError as exc:
-                category = classify_error(0, str(exc)).category
-                return OpenAIForwardResult(
-                    ok=False,
-                    provider=provider_name,
-                    model=normalized_model_id,
-                    status=502,
-                    headers={},
-                    body=b'',
-                    error=str(exc),
-                    category=category,
-                    suggestion=remediation_suggestion(category, provider_name),
-                )
-
-            if status < 400:
-                return self._normalize_stream_result(provider=provider_name, model=normalized_model_id, status=status, headers=headers, chunks=chunks)
-
-            text = b''.join(chunks).decode('utf-8', errors='ignore')
-            failure = classify_error(status, text)
-            if self.debug_log is not None:
-                self.debug_log(
-                    'request_failed',
-                    provider=provider_name,
-                    model=normalized_model_id,
-                    status=status,
-                    category=failure.category,
-                    error=text or f'upstream status {status}',
-                    suggestion=remediation_suggestion(failure.category, provider_name),
-                )
-            return OpenAIForwardResult(
-                ok=False,
-                provider=provider_name,
-                model=normalized_model_id,
-                status=status,
-                headers=headers,
-                body=b'',
-                error=text or f'upstream status {status}',
-                category=failure.category,
-                suggestion=remediation_suggestion(failure.category, provider_name),
-            )
+        request_payload['stream'] = False
 
         try:
             status, headers, body = adapter.chat_completions_raw(request_payload)

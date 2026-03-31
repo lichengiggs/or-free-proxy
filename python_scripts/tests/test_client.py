@@ -409,7 +409,7 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport, request_timeout_seconds=12)
         with self.assertRaises(ProviderError):
             adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok')
-        self.assertEqual(transport.timeouts[-1], 30)
+        self.assertEqual(transport.timeouts[-1], 60)
 
     def test_longcat_thinking_chat_stream_keeps_reasoning_and_content_chunks(self) -> None:
         provider = get_provider('longcat')

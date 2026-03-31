@@ -91,11 +91,11 @@ def configure_opencode_provider(*, port: int) -> dict[str, Any]:
             migrated = True
 
     provider_map[FREE_PROXY_PROVIDER_ID] = {
+        'npm': '@ai-sdk/openai-compatible',
         'name': FREE_PROXY_PROVIDER_ID,
         'options': {
-            'baseURL': f'http://localhost:{port}/v1',
+            'baseURL': f'http://127.0.0.1:{port}/v1',
             'apiKey': 'sk-not-needed',
-            'api': 'openai-completions',
         },
         'models': {
             'auto': {'name': 'auto'},

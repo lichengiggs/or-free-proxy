@@ -85,6 +85,7 @@
 - 遇到“长回复被截断”时，先检查上游请求参数和 provider 返回，尤其是 `max_tokens` / `maxOutputTokens`，不要先假设是前端滚动或 DOM 截断问题。
 - `probe` 和真实 `chat` 的输出预算必须分离：探测保持小输出，聊天按 provider 正常输出预算返回正文，避免把探测配置误复用到真实聊天。
 - 本地验证 `127.0.0.1` 流式链路时，如果 shell 配了 `http_proxy` / `https_proxy`，必须同时设置 `NO_PROXY=127.0.0.1,localhost` 或临时清空代理变量；否则代理可能注入 `Connection: keep-alive` / `Proxy-Connection: keep-alive`，把已正确结束的 SSE 误判成“服务端没关闭连接”。
+- 不要直接启动 opencode 的交互式 TUI 做回归验证；它会占住当前会话。需要验证时优先用非交互模式，例如 `opencode run --format json ...`，或后台命令。
 
 ## 测试与发布
 

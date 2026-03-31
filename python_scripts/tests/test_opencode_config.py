@@ -26,7 +26,9 @@ class OpencodeConfigTests(unittest.TestCase):
                 content = status.get('content') or {}
                 provider = content.get('provider', {}).get('free-proxy', {})
                 self.assertEqual(provider.get('name'), 'free-proxy')
-                self.assertEqual(provider.get('options', {}).get('baseURL'), 'http://localhost:8765/v1')
+                self.assertEqual(provider.get('npm'), '@ai-sdk/openai-compatible')
+                self.assertNotIn('api', provider.get('options', {}))
+                self.assertEqual(provider.get('options', {}).get('baseURL'), 'http://127.0.0.1:8765/v1')
                 models = provider.get('models', {})
                 self.assertEqual(sorted(models.keys()), ['auto'])
             finally:
@@ -87,7 +89,7 @@ class OpencodeConfigTests(unittest.TestCase):
                             'provider': {
                                 'free_proxy': {
                                     'name': 'free_proxy',
-                                    'options': {'baseURL': 'http://localhost:8765/v1'},
+                                    'options': {'baseURL': 'http://127.0.0.1:8765/v1'},
                                     'models': {'auto': {'name': 'auto'}},
                                 }
                             }
