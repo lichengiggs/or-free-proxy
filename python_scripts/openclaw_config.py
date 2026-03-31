@@ -8,9 +8,7 @@ from typing import Any
 FREE_PROXY_PROVIDER_ID = 'free-proxy'
 LEGACY_FREE_PROXY_PROVIDER_ID = 'free_proxy'
 FREE_PROXY_MODEL_ID = 'auto'
-FREE_PROXY_CODING_MODEL_ID = 'coding'
 FREE_PROXY_AGENT_MODEL = 'free-proxy/auto'
-FREE_PROXY_CODING_AGENT_MODEL = 'free-proxy/coding'
 LEGACY_FREE_PROXY_AGENT_MODEL = 'free_proxy/auto'
 
 
@@ -23,6 +21,10 @@ def _openclaw_dir() -> Path:
 
 def _openclaw_config_path() -> Path:
     return _openclaw_dir() / 'openclaw.json'
+
+
+def _migration_log_path() -> Path:
+    return _openclaw_dir() / 'migration.log'
 
 
 def _is_dict(value: Any) -> bool:
@@ -102,7 +104,7 @@ def _normalize_legacy_names(config: dict[str, Any]) -> None:
         current['fallbacks'] = [
             FREE_PROXY_AGENT_MODEL if (isinstance(item, str) and item == LEGACY_FREE_PROXY_AGENT_MODEL) else item
             for item in fallbacks
-            if isinstance(item, str)
+            if isinstance(item, str) and item != 'free-proxy/coding'
         ]
 
 
@@ -115,7 +117,6 @@ def _ensure_free_proxy_provider(config: dict[str, Any], port: int) -> None:
         'api': 'openai-completions',
         'models': [
             {'id': FREE_PROXY_MODEL_ID, 'name': FREE_PROXY_MODEL_ID},
-            {'id': FREE_PROXY_CODING_MODEL_ID, 'name': FREE_PROXY_CODING_MODEL_ID},
         ],
     }
 
@@ -124,7 +125,7 @@ def _ensure_agent_allowlist(config: dict[str, Any]) -> None:
     with_root = _ensure_root(config)
     allow_models = with_root['agents']['defaults']['models']
     allow_models[FREE_PROXY_AGENT_MODEL] = allow_models.get(FREE_PROXY_AGENT_MODEL, {})
-    allow_models[FREE_PROXY_CODING_AGENT_MODEL] = allow_models.get(FREE_PROXY_CODING_AGENT_MODEL, {})
+    allow_models.pop('free-proxy/coding', None)
 
 
 def _apply_default_mode(config: dict[str, Any]) -> None:
@@ -136,7 +137,7 @@ def _apply_default_mode(config: dict[str, Any]) -> None:
         return
 
     fallbacks = model.get('fallbacks')
-    normalized_fallbacks = [item for item in fallbacks if isinstance(item, str)] if isinstance(fallbacks, list) else None
+    normalized_fallbacks = [item for item in fallbacks if isinstance(item, str) and item != 'free-proxy/coding'] if isinstance(fallbacks, list) else None
     next_model = dict(model)
     next_model['primary'] = FREE_PROXY_AGENT_MODEL
     if normalized_fallbacks is not None:
@@ -159,7 +160,7 @@ def _apply_fallback_mode(config: dict[str, Any]) -> None:
         return
 
     fallbacks = model.get('fallbacks')
-    existing = [item for item in fallbacks if isinstance(item, str)] if isinstance(fallbacks, list) else []
+    existing = [item for item in fallbacks if isinstance(item, str) and item != 'free-proxy/coding'] if isinstance(fallbacks, list) else []
     merged = list(dict.fromkeys([*existing, FREE_PROXY_AGENT_MODEL]))
     next_model = dict(model)
     next_model['fallbacks'] = merged
@@ -213,6 +214,7 @@ def configure_openclaw_model(mode: str, *, port: int) -> dict[str, Any]:
         _apply_fallback_mode(new_config)
 
     path.write_text(json.dumps(new_config, indent=2, ensure_ascii=False), encoding='utf-8')
+    _migration_log_path().write_text('[DEPRECATED] free-proxy/coding is removed, migrating to free-proxy/auto\n', encoding='utf-8')
     return {'success': True, 'backup': str(backup_path) if status['exists'] else None}
 
 

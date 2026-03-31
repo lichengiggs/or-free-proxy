@@ -3,37 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .provider_catalog import get_provider_model_hints
 
-AliasName = Literal['auto', 'coding']
+
+AliasName = Literal['auto']
+CandidateSource = Literal['user_requested', 'health_boosted', 'provider_default', 'static_fallback_order']
 HealthState = dict[str, dict[str, object]]
 
 PUBLIC_MODEL_ALIASES: tuple[dict[str, str], ...] = (
     {'id': 'free-proxy/auto', 'object': 'model', 'owned_by': 'free-proxy'},
-    {'id': 'free-proxy/coding', 'object': 'model', 'owned_by': 'free-proxy'},
 )
 
-ALIAS_PROVIDER_ORDER: dict[AliasName, tuple[tuple[str, str], ...]] = {
-    'auto': (
-        ('longcat', 'LongCat-Flash-Lite'),
-        ('gemini', 'gemini-3.1-flash-lite-preview'),
-        ('github', 'gpt-4o-mini'),
-        ('mistral', 'mistral-large-latest'),
-        ('sambanova', 'DeepSeek-V3.1-Terminus'),
-        ('openrouter', 'openrouter/auto:free'),
-        ('groq', 'llama-3.3-70b-versatile'),
-        ('nvidia', 'meta/llama-3.1-70b-instruct'),
-    ),
-    'coding': (
-        ('longcat', 'LongCat-Flash-Lite'),
-        ('gemini', 'gemini-3.1-flash-lite-preview'),
-        ('github', 'gpt-4o'),
-        ('mistral', 'mistral-large-latest'),
-        ('sambanova', 'DeepSeek-V3.1-Terminus'),
-        ('openrouter', 'openrouter/auto:free'),
-        ('groq', 'llama-3.3-70b-versatile'),
-        ('nvidia', 'meta/llama-3.1-70b-instruct'),
-    ),
-}
+STATIC_AUTO_FALLBACK: tuple[tuple[str, str], ...] = (
+    ('longcat', 'LongCat-Flash-Lite'),
+    ('gemini', 'gemini-3.1-flash-lite-preview'),
+    ('github', 'gpt-4o-mini'),
+    ('mistral', 'mistral-large-latest'),
+    ('sambanova', 'DeepSeek-V3.1-Terminus'),
+    ('openrouter', 'openrouter/auto:free'),
+    ('groq', 'llama-3.3-70b-versatile'),
+    ('nvidia', 'meta/llama-3.1-70b-instruct'),
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +31,14 @@ class ResolvedModelRequest:
     provider: str | None
     model: str
     alias: AliasName | None
+
+
+@dataclass(frozen=True)
+class CandidateTarget:
+    provider: str
+    model: str
+    source: CandidateSource
+    rank: int
 
 
 def resolve_model_request(
@@ -60,9 +58,6 @@ def resolve_model_request(
 
     if normalized_model in {'auto', 'free-proxy/auto', 'free_proxy/auto'}:
         return ResolvedModelRequest(provider=None, model='auto', alias='auto')
-    if normalized_model in {'coding', 'free-proxy/coding', 'free_proxy/coding'}:
-        return ResolvedModelRequest(provider=None, model='coding', alias='coding')
-
     if '/' in normalized_model:
         maybe_provider, maybe_model = normalized_model.split('/', 1)
         if maybe_provider in known_providers and maybe_model:
@@ -76,12 +71,47 @@ def resolve_model_request(
 
 def resolve_alias_candidates(alias: AliasName, configured: list[str]) -> list[tuple[str, str]]:
     ordered: list[tuple[str, str]] = []
-    for provider_name, model_id in ALIAS_PROVIDER_ORDER[alias]:
+    for provider_name, model_id in STATIC_AUTO_FALLBACK:
         if provider_name not in configured:
             continue
         pair = (provider_name, model_id)
         if pair not in ordered:
             ordered.append(pair)
+    return ordered
+
+
+def build_auto_candidates(*, requested_model: str | None, configured: list[str], health: HealthState, now_ts: int, ttl_seconds: int) -> list[CandidateTarget]:
+    ordered: list[CandidateTarget] = []
+    seen: set[tuple[str, str]] = set()
+
+    def push(provider: str, model: str, source: CandidateSource) -> None:
+        key = (provider, model)
+        if provider not in configured or key in seen:
+            return
+        seen.add(key)
+        ordered.append(CandidateTarget(provider, model, source, len(ordered)))
+
+    if requested_model and '/' in requested_model:
+        provider_name, model_id = requested_model.split('/', 1)
+        push(provider_name, model_id, 'user_requested')
+
+    for key, value in health.items():
+        if value.get('ok') is not True or not isinstance(value.get('checked_at'), int):
+            continue
+        checked_at = int(value['checked_at'])
+        if now_ts - checked_at > ttl_seconds:
+            continue
+        provider_name, model_id = key.split('/', 1)
+        push(provider_name, model_id, 'health_boosted')
+
+    for provider_name in configured:
+        hints = get_provider_model_hints(provider_name)
+        if hints:
+            push(provider_name, hints[0], 'provider_default')
+
+    for provider_name, model_id in STATIC_AUTO_FALLBACK:
+        push(provider_name, model_id, 'static_fallback_order')
+
     return ordered
 
 

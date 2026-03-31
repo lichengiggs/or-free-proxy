@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from .config import DOTENV_PATH, hydrate_env, load_dotenv
 from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
 from .health_store import load_health, upsert_health
+from .openai_relay import OpenAIRelay
 from .provider_adapter import ProviderAdapter
 from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, list_providers
 from .provider_errors import ProviderError, ProviderHTTPError
@@ -95,6 +97,14 @@ class ProxyService:
             transport=self.transport,
             request_timeout_seconds=self.request_timeout_seconds,
             debug_log=self.debug_log,
+        )
+
+    def openai_relay(self) -> OpenAIRelay:
+        return OpenAIRelay(
+            adapter_factory=self.provider_adapter,
+            health_loader=lambda: load_health(self.health_path),
+            health_ttl_seconds=self.health_ttl_seconds,
+            configured_providers_loader=self.available_providers,
         )
 
     @staticmethod
@@ -322,6 +332,143 @@ class ProxyService:
         )
         return ResolvedOpenAIRequest(provider=resolved.provider, model=resolved.model, alias=resolved.alias)
 
+    @staticmethod
+    def _content_type(headers: dict[str, str]) -> str:
+        return str(headers.get('Content-Type') or headers.get('content-type') or '').lower()
+
+    @staticmethod
+    def _sse_json_line(payload: JsonObject | str) -> bytes:
+        if isinstance(payload, str):
+            return f'data: {payload}\n\n'.encode('utf-8')
+        return f'data: {json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}\n\n'.encode('utf-8')
+
+    @staticmethod
+    def _sse_done_chunk() -> Iterable[bytes]:
+        yield ProxyService._sse_json_line('[DONE]')
+
+    @staticmethod
+    def _sanitize_openai_forward_payload(provider_name: str, model_id: str, payload: JsonObject) -> tuple[str, JsonObject]:
+        normalized_model = model_id.strip()
+        provider_prefix = f'{provider_name}/'
+        if normalized_model.startswith(provider_prefix):
+            normalized_model = normalized_model.removeprefix(provider_prefix)
+        request_payload = dict(payload)
+        request_payload.pop('provider', None)
+        request_payload['model'] = normalized_model
+        return normalized_model, request_payload
+
+    @staticmethod
+    def _stream_text_delta(choice: object) -> dict[str, str]:
+        if not isinstance(choice, dict):
+            return {}
+        message = choice.get('message')
+        if isinstance(message, dict):
+            content = message.get('content')
+            if isinstance(content, str) and content:
+                return {'role': str(message.get('role') or 'assistant'), 'content': content}
+            reasoning = message.get('reasoning_content')
+            if isinstance(reasoning, str) and reasoning:
+                return {'role': str(message.get('role') or 'assistant'), 'reasoning_content': reasoning}
+            if isinstance(content, list):
+                chunks: list[str] = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get('text')
+                        if isinstance(text, str) and text:
+                            chunks.append(text)
+                merged = ''.join(chunks)
+                if merged:
+                    return {'role': str(message.get('role') or 'assistant'), 'content': merged}
+        text = choice.get('text')
+        if isinstance(text, str) and text:
+            return {'role': 'assistant', 'content': text}
+        return {}
+
+    def _wrap_openai_body_as_sse(self, fallback_model: str, body: bytes) -> Iterable[bytes]:
+        parsed = json.loads(body.decode('utf-8'))
+        if not isinstance(parsed, dict):
+            yield from self._sse_done_chunk()
+            return
+        choices = parsed.get('choices')
+        first_choice = choices[0] if isinstance(choices, list) and choices else {}
+        chunk_id = str(parsed.get('id', f'chatcmpl-{int(time.time())}'))
+        created_raw = parsed.get('created')
+        created = created_raw if isinstance(created_raw, int) else int(time.time())
+        actual_model = str(parsed.get('model') or fallback_model)
+        delta = self._stream_text_delta(first_choice)
+        if delta:
+            yield self._sse_json_line(
+                {
+                    'id': chunk_id,
+                    'object': 'chat.completion.chunk',
+                    'created': created,
+                    'model': actual_model,
+                    'choices': [{'index': 0, 'delta': delta, 'finish_reason': None}],
+                }
+            )
+        finish_reason = 'stop'
+        if isinstance(first_choice, dict):
+            raw_finish_reason = first_choice.get('finish_reason')
+            if isinstance(raw_finish_reason, str) and raw_finish_reason:
+                finish_reason = raw_finish_reason
+        yield self._sse_json_line(
+            {
+                'id': chunk_id,
+                'object': 'chat.completion.chunk',
+                'created': created,
+                'model': actual_model,
+                'choices': [{'index': 0, 'delta': {}, 'finish_reason': finish_reason}],
+            }
+        )
+        yield from self._sse_done_chunk()
+
+    def _wrap_text_as_sse(self, *, model: str, content: str) -> Iterable[bytes]:
+        chunk_id = 'chatcmpl-free-proxy'
+        created = 1
+        if content:
+            yield self._sse_json_line(
+                {
+                    'id': chunk_id,
+                    'object': 'chat.completion.chunk',
+                    'created': created,
+                    'model': model,
+                    'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': content}, 'finish_reason': None}],
+                }
+            )
+        yield self._sse_json_line(
+            {
+                'id': chunk_id,
+                'object': 'chat.completion.chunk',
+                'created': created,
+                'model': model,
+                'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
+            }
+        )
+        yield from self._sse_done_chunk()
+
+    def _normalize_stream_result(
+        self,
+        *,
+        provider: str,
+        model: str,
+        status: int,
+        headers: dict[str, str],
+        chunks: Iterable[bytes],
+    ) -> OpenAIForwardResult:
+        content_type = self._content_type(headers)
+        if 'text/event-stream' in content_type:
+            return OpenAIForwardResult(ok=True, provider=provider, model=model, status=status, headers=headers, body=b'', stream_chunks=chunks)
+        body = b''.join(chunks)
+        return OpenAIForwardResult(
+            ok=True,
+            provider=provider,
+            model=model,
+            status=status,
+            headers={'Content-Type': 'text/event-stream; charset=utf-8'},
+            body=b'',
+            stream_chunks=self._wrap_openai_body_as_sse(model, body),
+        )
+
     def execute_openai_target(self, target: ResolvedOpenAIRequest, payload: JsonObject) -> OpenAIForwardResult:
         if target.alias is not None:
             return self.forward_alias_chat(target.alias, payload)
@@ -378,6 +525,16 @@ class ProxyService:
             result = self.chat(provider_name, model_id, prompt, max_output_tokens=requested_output_tokens)
             if result.ok:
                 actual_model = result.actual_model or model_id
+                if bool(payload.get('stream')):
+                    return OpenAIForwardResult(
+                        ok=True,
+                        provider=provider_name,
+                        model=actual_model,
+                        status=200,
+                        headers={'Content-Type': 'text/event-stream; charset=utf-8'},
+                        body=b'',
+                        stream_chunks=self._wrap_text_as_sse(model=f'{provider_name}/{actual_model}', content=result.content or ''),
+                    )
                 return OpenAIForwardResult(
                     ok=True,
                     provider=provider_name,
@@ -400,16 +557,15 @@ class ProxyService:
             )
 
         adapter = self.provider_adapter(provider_name)
-        request_payload = dict(payload)
-        request_payload['model'] = model_id
+        normalized_model_id, request_payload = self._sanitize_openai_forward_payload(provider_name, model_id, payload)
         prompt = self._extract_prompt(request_payload)
         requested_output_tokens = self._requested_output_tokens(request_payload)
-        capabilities = get_model_capabilities(provider_name, model_id)
+        capabilities = get_model_capabilities(provider_name, normalized_model_id)
         if capabilities.get('reasoning') is True:
-            requested_output_tokens = min(requested_output_tokens or model_default_output_tokens(provider_name, model_id, 1024), model_default_output_tokens(provider_name, model_id, 1024))
+            requested_output_tokens = min(requested_output_tokens or model_default_output_tokens(provider_name, normalized_model_id, 1024), model_default_output_tokens(provider_name, normalized_model_id, 1024))
         budget = resolve_token_budget(
             provider=provider_name,
-            model=model_id,
+            model=normalized_model_id,
             prompt=prompt,
             requested_output_tokens=requested_output_tokens,
             learned_limits=load_token_limits(self.token_limit_path),
@@ -419,7 +575,7 @@ class ProxyService:
         if not isinstance(request_payload.get('messages'), list) or not request_payload.get('messages'):
             request_payload['messages'] = [{'role': 'user', 'content': budget.trimmed_prompt}]
             request_payload.pop('prompt', None)
-        if bool(request_payload.get('stream')) and capabilities.get('streaming') is not False:
+        if bool(request_payload.get('stream')):
             try:
                 status, headers, chunks = adapter.chat_completions_stream(request_payload)
             except ProviderError as exc:
@@ -427,7 +583,7 @@ class ProxyService:
                 return OpenAIForwardResult(
                     ok=False,
                     provider=provider_name,
-                    model=model_id,
+                    model=normalized_model_id,
                     status=502,
                     headers={},
                     body=b'',
@@ -437,7 +593,7 @@ class ProxyService:
                 )
 
             if status < 400:
-                return OpenAIForwardResult(ok=True, provider=provider_name, model=model_id, status=status, headers=headers, body=b'', stream_chunks=chunks)
+                return self._normalize_stream_result(provider=provider_name, model=normalized_model_id, status=status, headers=headers, chunks=chunks)
 
             text = b''.join(chunks).decode('utf-8', errors='ignore')
             failure = classify_error(status, text)
@@ -445,7 +601,7 @@ class ProxyService:
                 self.debug_log(
                     'request_failed',
                     provider=provider_name,
-                    model=model_id,
+                    model=normalized_model_id,
                     status=status,
                     category=failure.category,
                     error=text or f'upstream status {status}',
@@ -454,51 +610,7 @@ class ProxyService:
             return OpenAIForwardResult(
                 ok=False,
                 provider=provider_name,
-                model=model_id,
-                status=status,
-                headers=headers,
-                body=b'',
-                error=text or f'upstream status {status}',
-                category=failure.category,
-                suggestion=remediation_suggestion(failure.category, provider_name),
-            )
-
-        if bool(request_payload.get('stream')) and capabilities.get('streaming') is False:
-            try:
-                status, headers, body = adapter.chat_completions_raw(request_payload)
-            except ProviderError as exc:
-                category = classify_error(0, str(exc)).category
-                return OpenAIForwardResult(
-                    ok=False,
-                    provider=provider_name,
-                    model=model_id,
-                    status=502,
-                    headers={},
-                    body=b'',
-                    error=str(exc),
-                    category=category,
-                    suggestion=remediation_suggestion(category, provider_name),
-                )
-            if status < 400:
-                if isinstance(body, (bytes, bytearray)):
-                    return OpenAIForwardResult(ok=True, provider=provider_name, model=model_id, status=status, headers=headers, body=bytes(body))
-                return OpenAIForwardResult(ok=True, provider=provider_name, model=model_id, status=status, headers=headers, body=b'')
-            text = body.decode('utf-8', errors='ignore') if isinstance(body, (bytes, bytearray)) else str(body)
-            failure = classify_error(status, text)
-            if self.debug_log is not None:
-                self.debug_log(
-                    'request_failed',
-                    provider=provider_name,
-                    model=model_id,
-                    status=status,
-                    category=failure.category,
-                    error=text or f'upstream status {status}',
-                    suggestion=remediation_suggestion(failure.category, provider_name),
-                )
-            return OpenAIForwardResult(
-                ok=False,
-                provider=provider_name,
-                model=model_id,
+                model=normalized_model_id,
                 status=status,
                 headers=headers,
                 body=b'',
@@ -514,7 +626,7 @@ class ProxyService:
             return OpenAIForwardResult(
                 ok=False,
                 provider=provider_name,
-                model=model_id,
+                model=normalized_model_id,
                 status=502,
                 headers={},
                 body=b'',
@@ -524,7 +636,7 @@ class ProxyService:
             )
 
         if status < 400:
-            return OpenAIForwardResult(ok=True, provider=provider_name, model=model_id, status=status, headers=headers, body=body)
+            return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=body)
 
         text = body.decode('utf-8', errors='ignore')
         failure = classify_error(status, text)
@@ -532,7 +644,7 @@ class ProxyService:
             self.debug_log(
                 'request_failed',
                 provider=provider_name,
-                model=model_id,
+                model=normalized_model_id,
                 status=status,
                 category=failure.category,
                 error=text or f'upstream status {status}',
@@ -541,7 +653,7 @@ class ProxyService:
         return OpenAIForwardResult(
             ok=False,
             provider=provider_name,
-            model=model_id,
+            model=normalized_model_id,
             status=status,
             headers=headers,
             body=b'',

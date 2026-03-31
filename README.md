@@ -13,9 +13,16 @@
 ## 你会得到什么
 
 - 一个本地 OpenAI 兼容地址：`http://127.0.0.1:8765/v1`
-- 两个稳定模型别名：`free-proxy/auto`、`free-proxy/coding`
+- 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
+
+## 当前稳定接口
+
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- 公开模型只保留：`free-proxy/auto`
+- 旧 `coding` 输入仍会被识别，但统一返回 HTTP 400，错误码 `model_deprecated`
 
 ## 安装 free-proxy
 
@@ -71,7 +78,6 @@ uv run free-proxy serve
 如果你只记一条：
 
 - 不确定时先用 `free-proxy/auto`
-- 主要写代码时换成 `free-proxy/coding`
 
 ## 排障日志
 
@@ -79,6 +85,37 @@ uv run free-proxy serve
 
 ```bash
 uv run free-proxy serve --debug
+```
+
+## 流式验证注意事项
+
+如果你本机 shell 配了 `http_proxy` / `https_proxy`，验证本地服务时请同时设置：
+
+```bash
+NO_PROXY=127.0.0.1,localhost
+```
+
+或者临时清空代理变量再测。
+
+否则 `curl`、`opencode` 之类的客户端可能经过本地代理，看到代理注入的 `Connection: keep-alive` / `Proxy-Connection: keep-alive`，误判成 SSE 没有正常结束。
+
+## OpenAI 兼容调用示例
+
+```bash
+curl -s http://127.0.0.1:8765/v1/models
+
+curl -s -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}]}'
+```
+
+流式验证时建议显式跳过代理：
+
+```bash
+NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= \
+curl -N -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}],"stream":true}'
 ```
 
 ## 常见问题

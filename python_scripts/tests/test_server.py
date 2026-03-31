@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from python_scripts.cli import build_parser
 from python_scripts.server import ApiHandler
-from python_scripts.service import OpenAIForwardResult, ResolvedOpenAIRequest
+from python_scripts.service import OpenAIForwardResult, ProxyService
 
 
 @dataclass
@@ -53,8 +54,55 @@ class FakeService:
     def public_models(self) -> list[dict[str, str]]:
         return [
             {'id': 'free-proxy/auto', 'object': 'model', 'owned_by': 'free-proxy'},
-            {'id': 'free-proxy/coding', 'object': 'model', 'owned_by': 'free-proxy'},
         ]
+
+    class _Relay:
+        def normalize(self, payload: dict[str, object]):
+            model = str(payload.get('model', '')).strip()
+            if not model:
+                raise ValueError('missing model')
+            if model in {'coding', 'free-proxy/coding', 'free_proxy/coding'}:
+                raise ValueError("model 'coding' is no longer supported. Use 'free-proxy/auto' instead.")
+            if model not in {'auto', 'free-proxy/auto', 'free_proxy/auto'}:
+                raise ValueError("model must be 'free-proxy/auto'")
+            return type('Request', (), {'public_model': 'free-proxy/auto', 'stream': bool(payload.get('stream'))})()
+
+        def handle_chat(self, request):
+            if request.stream:
+                return type(
+                    'RelayResponse',
+                    (),
+                    {
+                        'status': 200,
+                        'headers': {'Content-Type': 'text/event-stream; charset=utf-8'},
+                        'body': None,
+                        'stream_chunks': [
+                            b'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"echo:hello"},"index":0}]}\n\n',
+                            b'data: [DONE]\n\n',
+                        ],
+                    },
+                )()
+            return type(
+                'RelayResponse',
+                (),
+                {
+                    'status': 200,
+                    'headers': {'Content-Type': 'application/json; charset=utf-8'},
+                    'body': json.dumps(
+                        {
+                            'id': 'chatcmpl-test',
+                            'object': 'chat.completion',
+                            'model': 'openrouter/openrouter/auto:free',
+                            'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'echo:hello'}, 'finish_reason': 'stop'}],
+                            'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
+                        }
+                    ).encode('utf-8'),
+                    'stream_chunks': None,
+                },
+            )()
+
+    def openai_relay(self):
+        return self._Relay()
 
     def verify_provider_key(self, provider: str) -> dict[str, object]:
         return {'ok': True, 'provider': provider, 'verified_model': 'm1'}
@@ -78,48 +126,6 @@ class FakeService:
                 b'data: [DONE]\n\n',
             ])
         return OpenAIForwardResult(ok=True, provider=provider, model=model, status=200, headers={'Content-Type': 'application/json; charset=utf-8'}, body=json.dumps({'choices': [{'message': {'role': 'assistant', 'content': 'echo:hello'}}]}).encode('utf-8'))
-
-    def resolve_openai_target(self, payload: dict[str, object]) -> ResolvedOpenAIRequest:
-        model = str(payload.get('model', '')).strip()
-        if not model:
-            raise ValueError('missing model')
-        if model in {'auto', 'free-proxy/auto', 'free_proxy/auto'}:
-            return ResolvedOpenAIRequest(provider=None, model='auto', alias='auto')
-        if model in {'coding', 'free-proxy/coding', 'free_proxy/coding'}:
-            return ResolvedOpenAIRequest(provider=None, model='coding', alias='coding')
-        if '/' in model:
-            provider, direct_model = model.split('/', 1)
-            return ResolvedOpenAIRequest(provider=provider, model=direct_model, alias=None)
-        return ResolvedOpenAIRequest(provider='openrouter', model=model, alias=None)
-
-    def execute_openai_target(self, target: ResolvedOpenAIRequest, payload: dict[str, object]) -> OpenAIForwardResult:
-        if target.alias == 'auto':
-            body = json.dumps({'model': 'openrouter/auto', 'choices': [{'message': {'role': 'assistant', 'content': 'echo:hello'}}]}).encode('utf-8')
-            return OpenAIForwardResult(ok=True, provider='openrouter', model='auto', status=200, headers={'Content-Type': 'application/json; charset=utf-8'}, body=body)
-        if target.alias == 'coding':
-            body = json.dumps({'model': 'openrouter/coding', 'choices': [{'message': {'role': 'assistant', 'content': 'echo:hello'}}]}).encode('utf-8')
-            return OpenAIForwardResult(ok=True, provider='openrouter', model='coding', status=200, headers={'Content-Type': 'application/json; charset=utf-8'}, body=body)
-        if target.provider == 'gemini':
-            return OpenAIForwardResult(ok=True, provider='gemini', model=target.model, status=200, headers={}, body=b'', content='echo:hello')
-        if target.provider == 'bad':
-            return OpenAIForwardResult(ok=False, provider='bad', model=target.model, status=401, headers={}, body=b'', content=None, error='provider not available', category='auth', suggestion='set key')
-        if payload.get('stream'):
-            body = (
-                'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"echo:hello"},"index":0}]}\n\n'
-                'data: [DONE]\n\n'
-            ).encode('utf-8')
-            return OpenAIForwardResult(ok=True, provider='openrouter', model=target.model, status=200, headers={'Content-Type': 'text/event-stream; charset=utf-8'}, body=body)
-        body = json.dumps(
-            {
-                'id': 'chatcmpl-test',
-                'object': 'chat.completion',
-                'model': f'{target.provider}/{target.model}',
-                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'echo:hello'}, 'finish_reason': 'stop'}],
-                'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
-            }
-        ).encode('utf-8')
-        return OpenAIForwardResult(ok=True, provider=str(target.provider), model=target.model, status=200, headers={'Content-Type': 'application/json; charset=utf-8'}, body=body)
-
 
 class ServerApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -249,8 +255,7 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body['object'], 'list')
         ids = [str(item['id']) for item in body['data']]
-        self.assertIn('free-proxy/auto', ids)
-        self.assertIn('free-proxy/coding', ids)
+        self.assertEqual(ids, ['free-proxy/auto'])
 
     def test_recommended_models_route_accepts_requested_model_query(self) -> None:
         status, body = self._request('GET', '/api/providers/openrouter/models/recommended?model=my-picked-model')
@@ -267,23 +272,13 @@ class ServerApiTests(unittest.TestCase):
         status, body = self._request(
             'POST',
             '/v1/chat/completions',
-            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}]},
+            {'model': 'free-proxy/auto', 'requested_model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}]},
         )
         self.assertEqual(status, 200)
         self.assertEqual(body['object'], 'chat.completion')
-        self.assertEqual(body['model'], 'openrouter/m1')
+        self.assertEqual(body['model'], 'openrouter/openrouter/auto:free')
         self.assertEqual(body['choices'][0]['message']['content'], 'echo:hello')
         self.assertEqual(body['choices'][0]['message']['role'], 'assistant')
-
-    def test_openai_chat_completion_can_fallback_to_default_provider_when_provider_missing(self) -> None:
-        status, body = self._request(
-            'POST',
-            '/v1/chat/completions',
-            {'model': 'm1', 'messages': [{'role': 'user', 'content': 'hello'}]},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(body['model'], 'openrouter/m1')
-        self.assertEqual(body['choices'][0]['message']['content'], 'echo:hello')
 
     def test_openai_chat_completion_supports_auto_model_for_newbies(self) -> None:
         status, headers, body = self._request_raw(
@@ -293,23 +288,23 @@ class ServerApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertIn('application/json', headers.get('content-type', ''))
-        self.assertIn('openrouter/auto', body)
+        self.assertIn('openrouter/openrouter/auto:free', body)
 
-    def test_openai_chat_completion_supports_coding_alias_for_agents(self) -> None:
+    def test_openai_chat_completion_rejects_coding_alias_for_agents(self) -> None:
         status, headers, body = self._request_raw(
             'POST',
             '/v1/chat/completions',
             {'model': 'free-proxy/coding', 'messages': [{'role': 'user', 'content': 'hello'}]},
         )
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 400)
         self.assertIn('application/json', headers.get('content-type', ''))
-        self.assertIn('openrouter/coding', body)
+        self.assertIn('model_deprecated', body)
 
     def test_openai_chat_completion_stream_mode_returns_sse_when_requested(self) -> None:
         status, headers, body = self._request_raw(
             'POST',
             '/v1/chat/completions',
-            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            {'model': 'free-proxy/auto', 'requested_model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
         )
         self.assertEqual(status, 200)
         self.assertIn('text/event-stream', headers.get('content-type', ''))
@@ -320,7 +315,7 @@ class ServerApiTests(unittest.TestCase):
         status, headers, body = self._request_raw(
             'POST',
             '/v1/chat/completions',
-            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            {'model': 'free-proxy/auto', 'requested_model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
         )
         self.assertEqual(status, 200)
         self.assertIn('text/event-stream', headers.get('content-type', ''))
@@ -331,7 +326,7 @@ class ServerApiTests(unittest.TestCase):
         status, headers, body = self._request_raw_prefix(
             'POST',
             '/v1/chat/completions',
-            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            {'model': 'free-proxy/auto', 'requested_model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
         )
         self.assertEqual(status, 200)
         self.assertIn('text/event-stream', headers.get('content-type', ''))
@@ -341,12 +336,29 @@ class ServerApiTests(unittest.TestCase):
         status, headers, body = self._request_raw(
             'POST',
             '/v1/chat/completions',
-            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            {'model': 'free-proxy/auto', 'requested_model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
         )
         self.assertEqual(status, 200)
         self.assertIn('text/event-stream', headers.get('content-type', ''))
         self.assertIn('data: [DONE]', body)
         self.assertIn('chat.completion.chunk', body)
+
+    def test_openai_chat_completion_stream_mode_closes_connection_after_done(self) -> None:
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        started = time.time()
+        conn.request(
+            'POST',
+            '/v1/chat/completions',
+            body=json.dumps({'model': 'free-proxy/auto', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True}).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+        )
+        resp = conn.getresponse()
+        body = resp.read().decode('utf-8')
+        conn.close()
+        elapsed = time.time() - started
+        self.assertEqual(resp.status, 200)
+        self.assertIn('data: [DONE]', body)
+        self.assertLess(elapsed, 1.5)
 
     def test_legacy_chat_completion_stream_mode_returns_sse(self) -> None:
         status, headers, body = self._request_raw_prefix(
@@ -358,14 +370,144 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('text/event-stream', headers.get('content-type', ''))
         self.assertIn('data: ', body)
 
+    def test_legacy_chat_completion_stream_mode_wraps_json_fallback_as_sse(self) -> None:
+        old_service = ApiHandler.service
+        old_longcat_key = os.environ.get('LONGCAT_API_KEY')
+
+        class LongcatJsonTransport:
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                del headers, body, timeout
+                if method == 'GET' and url.endswith('/models'):
+                    return 200, {}, iter([])
+                return 200, {'Content-Type': 'application/json; charset=utf-8'}, iter([
+                    json.dumps({
+                        'id': 'chatcmpl-test',
+                        'object': 'chat.completion',
+                        'created': 1,
+                        'model': 'LongCat-Flash-Thinking-2601',
+                        'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-1'}, 'finish_reason': 'stop'}],
+                        'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+                    }).encode('utf-8')
+                ])
+
+            def request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], bytes]:
+                del headers, timeout
+                if method == 'GET' and url.endswith('/models'):
+                    return 200, {}, json.dumps({'data': [{'id': 'LongCat-Flash-Thinking-2601'}]}).encode('utf-8')
+                return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({
+                    'id': 'chatcmpl-test',
+                    'object': 'chat.completion',
+                    'created': 1,
+                    'model': 'LongCat-Flash-Thinking-2601',
+                    'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-1'}, 'finish_reason': 'stop'}],
+                    'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+                }).encode('utf-8')
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            os.environ['LONGCAT_API_KEY'] = 'test-longcat'
+            ApiHandler.service = ProxyService(
+                transport=LongcatJsonTransport(),
+                health_path=Path(tmp.name) / 'health.json',
+                token_limit_path=Path(tmp.name) / 'token-limits.json',
+            )
+            status, headers, body = self._request_raw(
+                'POST',
+                '/chat/completions',
+                {'provider': 'longcat', 'model': 'LongCat-Flash-Thinking-2601', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            )
+        finally:
+            ApiHandler.service = old_service
+            if old_longcat_key is None:
+                os.environ.pop('LONGCAT_API_KEY', None)
+            else:
+                os.environ['LONGCAT_API_KEY'] = old_longcat_key
+            tmp.cleanup()
+
+        self.assertEqual(status, 200)
+        self.assertIn('text/event-stream', headers.get('content-type', ''))
+        self.assertIn('data: [DONE]', body)
+
+    def test_legacy_chat_completion_stream_mode_wraps_non_openai_provider_as_sse(self) -> None:
+        old_service = ApiHandler.service
+        old_gemini_key = os.environ.get('GEMINI_API_KEY')
+
+        class GeminiTransport:
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                del headers, body, timeout
+                if method == 'GET' and url.endswith('/models'):
+                    return 200, {}, iter([])
+                return 200, {'Content-Type': 'application/json; charset=utf-8'}, iter([
+                    json.dumps({'candidates': [{'content': {'parts': [{'text': 'gemini-ok'}]}}]}).encode('utf-8')
+                ])
+
+            def request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], bytes]:
+                del headers, body, timeout
+                if method == 'GET' and url.endswith('/models'):
+                    return 200, {}, json.dumps({'models': [{'id': 'models/gemini-2.0-flash'}]}).encode('utf-8')
+                return 200, {}, json.dumps({'candidates': [{'content': {'parts': [{'text': 'gemini-ok'}]}}]}).encode('utf-8')
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            os.environ['GEMINI_API_KEY'] = 'test-gemini'
+            ApiHandler.service = ProxyService(
+                transport=GeminiTransport(),
+                health_path=Path(tmp.name) / 'health.json',
+                token_limit_path=Path(tmp.name) / 'token-limits.json',
+            )
+            status, headers, body = self._request_raw(
+                'POST',
+                '/chat/completions',
+                {'provider': 'gemini', 'model': 'gemini-2.0-flash', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            )
+        finally:
+            ApiHandler.service = old_service
+            if old_gemini_key is None:
+                os.environ.pop('GEMINI_API_KEY', None)
+            else:
+                os.environ['GEMINI_API_KEY'] = old_gemini_key
+            tmp.cleanup()
+
+        self.assertEqual(status, 200)
+        self.assertIn('text/event-stream', headers.get('content-type', ''))
+        self.assertIn('data: [DONE]', body)
+
     def test_openai_chat_completion_wraps_gemini_text_result(self) -> None:
         status, body = self._request(
             'POST',
             '/v1/chat/completions',
-            {'model': 'gemini/gemini-2.0-flash', 'messages': [{'role': 'user', 'content': 'hello'}]},
+            {'model': 'free-proxy/auto', 'requested_model': 'gemini/gemini-2.0-flash', 'messages': [{'role': 'user', 'content': 'hello'}]},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(body['model'], 'gemini/gemini-2.0-flash')
+        self.assertEqual(body['model'], 'openrouter/openrouter/auto:free')
         self.assertEqual(body['choices'][0]['message']['content'], 'echo:hello')
 
     def test_openai_chat_completion_returns_openai_style_error_when_model_missing(self) -> None:
@@ -403,7 +545,7 @@ class ServerApiTests(unittest.TestCase):
         content = json.loads(Path(self.tmp.name, 'opencode.json').read_text(encoding='utf-8'))
         provider = content['provider']['free-proxy']
         self.assertEqual(provider['options']['baseURL'], 'http://localhost:8765/v1')
-        self.assertIn('coding', provider['models'])
+        self.assertEqual(sorted(provider['models'].keys()), ['auto'])
 
 
 if __name__ == '__main__':

@@ -169,6 +169,16 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(transport.requests[0][0], 'POST')
         self.assertIn('/chat/completions', transport.requests[0][1])
 
+    def test_chat_request_returns_adapter_response_object(self) -> None:
+        provider = get_provider('openrouter')
+        transport = FakeTransport({
+            ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (200, {'Content-Type': 'application/json; charset=utf-8'}, b'{"choices":[{"message":{"content":"ok"}}]}'),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        response = adapter.forward_chat({'model': 'openrouter/auto:free', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.content_type, 'application/json; charset=utf-8')
+
     def test_urllib_stream_request_yields_each_sse_event(self) -> None:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
@@ -217,6 +227,76 @@ class ClientTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_urllib_stream_request_stops_after_done_event_even_if_socket_stays_open(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n')
+                self.wfile.flush()
+                self.wfile.write(b'data: [DONE]\n\n')
+                self.wfile.flush()
+                time.sleep(1.5)
+
+            def log_message(self, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        started = time.time()
+        try:
+            transport = UrlLibTransport()
+            status, headers, chunks = transport.stream_request('POST', f'http://127.0.0.1:{server.server_address[1]}/chat/completions', {'Content-Type': 'application/json'}, b'{}', timeout=5)
+            items = list(chunks)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        elapsed = time.time() - started
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get('Content-Type'), 'text/event-stream; charset=utf-8')
+        self.assertEqual(items[-1], b'data: [DONE]\n\n')
+        self.assertLess(elapsed, 1.0)
+
+    def test_urllib_stream_request_stops_after_done_event_without_space_even_if_socket_stays_open(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(b'data:{"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n')
+                self.wfile.flush()
+                self.wfile.write(b'data:[DONE]\n\n')
+                self.wfile.flush()
+                time.sleep(1.5)
+
+            def log_message(self, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        started = time.time()
+        try:
+            transport = UrlLibTransport()
+            status, headers, chunks = transport.stream_request('POST', f'http://127.0.0.1:{server.server_address[1]}/chat/completions', {'Content-Type': 'application/json'}, b'{}', timeout=5)
+            items = list(chunks)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        elapsed = time.time() - started
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get('Content-Type'), 'text/event-stream; charset=utf-8')
+        self.assertEqual(items[-1], b'data:[DONE]\n\n')
+        self.assertLess(elapsed, 1.0)
 
     def test_openai_chat_raises_when_content_is_null(self) -> None:
         provider = get_provider('openrouter')

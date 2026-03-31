@@ -31,6 +31,21 @@ class FakeTransport:
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
 
 
+class GeminiTransport:
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del headers, body, timeout
+        if method == 'GET' and url.endswith('/models'):
+            return 200, {}, json.dumps({'models': [{'id': 'models/gemini-2.0-flash'}]}).encode('utf-8')
+        return 200, {}, json.dumps({'candidates': [{'content': {'parts': [{'text': 'gemini-ok'}]}}]}).encode('utf-8')
+
+
 class FallbackTransport:
     def __init__(self) -> None:
         self.chat_models: list[str] = []
@@ -165,6 +180,9 @@ class TokenLimitRetryTransport:
 
 
 class RawTransport:
+    def __init__(self) -> None:
+        self.last_payload: dict[str, object] | None = None
+
     def request(
         self,
         method: str,
@@ -177,6 +195,7 @@ class RawTransport:
         if method == 'GET' and url.endswith('/models'):
             return 200, {}, json.dumps({'data': [{'id': 'model-a', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()
         payload = json.loads((body or b'{}').decode('utf-8'))
+        self.last_payload = payload
         return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({'model': payload.get('model'), 'ok': True}).encode()
 
 
@@ -234,16 +253,6 @@ class StreamHttpTransport:
 
 
 class LongcatFallbackTransport(StreamHttpTransport):
-    def stream_request(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str] | None = None,
-        body: bytes | None = None,
-        timeout: int = 30,
-    ) -> tuple[int, dict[str, str], object]:
-        raise AssertionError('stream_request should not be used for longcat thinking stream fallback')
-
     def request(
         self,
         method: str,
@@ -264,6 +273,28 @@ class LongcatFallbackTransport(StreamHttpTransport):
             'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-1'}, 'finish_reason': 'stop'}],
             'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
         }).encode('utf-8')
+
+
+class JsonFallbackStreamTransport(StreamHttpTransport):
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        self.requests.append((method, url, headers, body, timeout))
+        return 200, {'Content-Type': 'application/json; charset=utf-8'}, iter([
+            json.dumps({
+                'id': 'chatcmpl-stream-json',
+                'object': 'chat.completion',
+                'created': 2,
+                'model': 'model-a',
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-json'}, 'finish_reason': 'stop'}],
+                'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+            }).encode('utf-8')
+        ])
 
 
 class ServiceTests(unittest.TestCase):
@@ -424,19 +455,16 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(verify['category'], 'network')
             self.assertIn('检查网络', verify['suggestion'])
 
-    def test_public_models_exposes_auto_and_coding_aliases(self) -> None:
+    def test_public_models_exposes_auto_alias_only(self) -> None:
         service = self.make_service(FakeTransport())
         models = service.public_models()
         ids = [item['id'] for item in models]
-        self.assertIn('free-proxy/auto', ids)
-        self.assertIn('free-proxy/coding', ids)
+        self.assertEqual(ids, ['free-proxy/auto'])
 
-    def test_resolve_openai_target_supports_public_alias(self) -> None:
-        os.environ['LONGCAT_API_KEY'] = 'test-longcat'
-        os.environ['GEMINI_API_KEY'] = 'test-gemini'
+    def test_service_exposes_openai_relay_accessor(self) -> None:
         service = self.make_service(FakeTransport())
-        target = service.resolve_openai_target({'model': 'free-proxy/coding'})
-        self.assertEqual(target, ResolvedOpenAIRequest(provider=None, model='coding', alias='coding'))
+        relay = service.openai_relay()
+        self.assertIsNotNone(relay)
 
     def test_execute_openai_target_returns_raw_forward_result_for_openai_provider(self) -> None:
         service = self.make_service(RawTransport())
@@ -457,6 +485,39 @@ class ServiceTests(unittest.TestCase):
                 suggestion=None,
             ),
         )
+
+    def test_forward_direct_chat_strips_local_provider_field_before_upstream_request(self) -> None:
+        transport = RawTransport()
+        service = self.make_service(transport)
+
+        result = service.forward_direct_chat(
+            'openrouter',
+            'model-a',
+            {'provider': 'openrouter', 'model': 'model-a', 'messages': [{'role': 'user', 'content': 'hello'}]},
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(transport.last_payload)
+        self.assertNotIn('provider', transport.last_payload or {})
+        self.assertEqual(transport.last_payload and transport.last_payload.get('model'), 'model-a')
+
+    def test_forward_direct_chat_strips_duplicate_provider_prefix_from_model_before_upstream_request(self) -> None:
+        transport = RawTransport()
+        service = self.make_service(transport)
+
+        result = service.forward_direct_chat(
+            'openrouter',
+            'openrouter/stepfun/step-3.5-flash:free',
+            {
+                'provider': 'openrouter',
+                'model': 'openrouter/stepfun/step-3.5-flash:free',
+                'messages': [{'role': 'user', 'content': 'hello'}],
+            },
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(transport.last_payload)
+        self.assertEqual(transport.last_payload and transport.last_payload.get('model'), 'stepfun/step-3.5-flash:free')
 
     def test_execute_openai_target_streams_chunked_sse_for_openai_provider(self) -> None:
         transport = ChunkedStreamTransport()
@@ -507,16 +568,67 @@ class ServiceTests(unittest.TestCase):
         body = json.loads(bytes(payload).decode('utf-8'))
         self.assertLessEqual(int(body['max_tokens']), 1024)
 
-    def test_execute_openai_target_returns_json_for_longcat_thinking_stream_requests(self) -> None:
-        transport = LongcatFallbackTransport()
+    def test_execute_openai_target_streams_longcat_thinking_when_upstream_supports_stream(self) -> None:
+        transport = StreamHttpTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
         result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
+        self.assertIsNotNone(result.stream_chunks)
+        self.assertEqual(
+            list(result.stream_chunks or []),
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
+
+    def test_execute_openai_target_uses_stream_transport_even_when_capability_marks_model_non_streaming(self) -> None:
+        transport = StreamHttpTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.stream_chunks)
         self.assertEqual(len(transport.requests), 1)
-        self.assertIsNone(result.stream_chunks)
-        self.assertEqual(result.body, b'{"id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "LongCat-Flash-Thinking-2601", "choices": [{"index": 0, "message": {"role": "assistant", "content": "answer-1"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}')
+
+    def test_execute_openai_target_wraps_non_sse_stream_response_into_sse(self) -> None:
+        transport = JsonFallbackStreamTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(transport.requests), 1)
+        self.assertIsNotNone(result.stream_chunks)
+        self.assertEqual(
+            list(result.stream_chunks or []),
+            [
+                b'data: {"id":"chatcmpl-stream-json","object":"chat.completion.chunk","created":2,"model":"model-a","choices":[{"index":0,"delta":{"role":"assistant","content":"answer-json"},"finish_reason":null}]}\n\n',
+                b'data: {"id":"chatcmpl-stream-json","object":"chat.completion.chunk","created":2,"model":"model-a","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
+
+    def test_execute_openai_target_wraps_non_openai_provider_stream_into_sse(self) -> None:
+        transport = GeminiTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='gemini', model='gemini-2.0-flash', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.stream_chunks)
+        self.assertEqual(
+            list(result.stream_chunks or []),
+            [
+                b'data: {"id":"chatcmpl-free-proxy","object":"chat.completion.chunk","created":1,"model":"gemini/gemini-2.0-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"gemini-ok"},"finish_reason":null}]}\n\n',
+                b'data: {"id":"chatcmpl-free-proxy","object":"chat.completion.chunk","created":1,"model":"gemini/gemini-2.0-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
 
     def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
         transport = TokenLimitRetryTransport()

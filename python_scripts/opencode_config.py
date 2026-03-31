@@ -21,6 +21,10 @@ def _opencode_config_path() -> Path:
     return _opencode_dir() / 'opencode.json'
 
 
+def _migration_log_path() -> Path:
+    return _opencode_dir() / 'migration.log'
+
+
 def _get_next_backup_path() -> Path:
     root = _opencode_dir()
     files = [p.name for p in root.iterdir()] if root.exists() else []
@@ -78,6 +82,14 @@ def configure_opencode_provider(*, port: int) -> dict[str, Any]:
         provider_map[FREE_PROXY_PROVIDER_ID] = legacy
     provider_map.pop(LEGACY_FREE_PROXY_PROVIDER_ID, None)
 
+    current = provider_map.get(FREE_PROXY_PROVIDER_ID)
+    migrated = False
+    if isinstance(current, dict):
+        models = current.get('models')
+        if isinstance(models, dict) and 'coding' in models:
+            models.pop('coding', None)
+            migrated = True
+
     provider_map[FREE_PROXY_PROVIDER_ID] = {
         'name': FREE_PROXY_PROVIDER_ID,
         'options': {
@@ -87,9 +99,10 @@ def configure_opencode_provider(*, port: int) -> dict[str, Any]:
         },
         'models': {
             'auto': {'name': 'auto'},
-            'coding': {'name': 'coding'},
         },
     }
 
     path.write_text(json.dumps(new_config, indent=2, ensure_ascii=False), encoding='utf-8')
+    if migrated:
+        _migration_log_path().write_text('[DEPRECATED] free-proxy/coding is removed, migrating to free-proxy/auto\n', encoding='utf-8')
     return {'success': True, 'backup': str(backup_path) if status['exists'] else None}

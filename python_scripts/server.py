@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import socket
 import sys
 import time
 from collections.abc import Iterable
@@ -131,13 +132,28 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
         self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
+        self.send_header('Connection', 'close')
         self.end_headers()
         for raw in chunks:
             if not raw:
                 continue
             self.wfile.write(raw)
             self.wfile.flush()
+        self.close_connection = True
+        try:
+            self.connection.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+    def _write_relay_response(self, result: object) -> None:
+        status = int(getattr(result, 'status', 500))
+        headers = getattr(result, 'headers', {})
+        body = getattr(result, 'body', None)
+        stream_chunks = getattr(result, 'stream_chunks', None)
+        if stream_chunks is not None:
+            self._send_sse_response(status=status, chunks=stream_chunks)
+            return
+        self._send_raw_response(status=status, headers=headers if isinstance(headers, dict) else {}, body=body if isinstance(body, bytes) else b'')
 
     @staticmethod
     def _message_to_text(value: object) -> str:
@@ -381,11 +397,27 @@ class ApiHandler(BaseHTTPRequestHandler):
             prompt = self._extract_prompt(payload)
             if bool(payload.get('stream')):
                 try:
-                    if get_provider(provider).format == 'openai':
-                        result = self.service.forward_direct_chat(provider, model, payload)
-                        if result.ok and result.stream_chunks is not None:
-                            self._send_sse_response(status=result.status, chunks=result.stream_chunks)
-                            return
+                    result = self.service.forward_direct_chat(provider, model, payload)
+                    if result.ok and result.stream_chunks is not None:
+                        self._send_sse_response(status=result.status, chunks=result.stream_chunks)
+                        return
+                    if result.ok and result.body:
+                        self._send_raw_response(status=result.status, headers=result.headers, body=result.body)
+                        return
+                    if not result.ok:
+                        self._send_json(
+                            result.status or 400,
+                            {
+                                'ok': False,
+                                'provider': provider,
+                                'model': model,
+                                'error': result.error,
+                                'category': result.category,
+                                'status': result.status,
+                                'suggestion': result.suggestion,
+                            },
+                        )
+                        return
                 except ProviderError as exc:
                     self._send_json(400, {'ok': False, 'provider': provider, 'model': model, 'error': str(exc)})
                     return
@@ -418,7 +450,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == '/v1/chat/completions':
             try:
-                target = self.service.resolve_openai_target(payload)
+                relay = self.service.openai_relay()
+                request = relay.normalize(payload)
             except ValueError as exc:
                 self._debug_log(
                     'request_failed',
@@ -428,7 +461,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     category='invalid_request_error',
                     error=str(exc),
                 )
-                self._send_openai_error(400, str(exc))
+                self._send_openai_error(400, str(exc), code='model_deprecated' if 'no longer supported' in str(exc) else None)
                 return
 
             summary = self._payload_summary(payload)
@@ -436,41 +469,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 'route_resolved',
                 request_id=request_id,
                 requested_model=str(payload.get('model', '')),
-                route_kind='alias' if target.alias is not None else 'direct',
-                resolved_provider=target.provider or 'free-proxy',
-                resolved_model=target.model,
-                resolved_via='default' if target.alias is not None else 'explicit',
+                route_kind='relay',
+                resolved_provider='free-proxy',
+                resolved_model=request.public_model,
+                resolved_via='auto',
             )
             self._debug_log('payload_summary', request_id=request_id, **summary)
-            result = self.service.execute_openai_target(target, payload)
-            if not result.ok:
-                self._debug_log(
-                    'request_failed',
-                    request_id=request_id,
-                    provider=result.provider,
-                    model=result.model,
-                    status=result.status,
-                    category=result.category,
-                    error=result.error or 'upstream error',
-                    suggestion=result.suggestion or 'none',
-                )
-                self._send_openai_error(
-                    result.status or 502,
-                    result.error or 'upstream error',
-                    error_type=result.category or 'server_error',
-                    code=str(result.status) if result.status else None,
-                )
-                return
-
-            if bool(payload.get('stream')) and result.stream_chunks is not None:
-                self._send_sse_response(status=result.status, chunks=result.stream_chunks)
-                return
-
-            if result.body:
-                self._send_raw_response(status=result.status, headers=result.headers, body=result.body)
-                return
-
-            self._send_openai_chat_success(model=f'{result.provider}/{result.model}', content=result.content or '')
+            result = relay.handle_chat(request)
+            self._write_relay_response(result)
             return
 
         self._send_json(404, {'ok': False, 'error': 'not found'})

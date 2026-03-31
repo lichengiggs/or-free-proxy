@@ -675,7 +675,7 @@
                 <div class="card-head">
                     <div>
                         <h2>6. 接入说明</h2>
-                        <div class="subtle">以下示例与当前真实实现一致，优先使用稳定别名 `free-proxy/coding` 与 `free-proxy/auto`。</div>
+                        <div class="subtle">以下示例与当前真实实现一致，只保留稳定别名 `free-proxy/auto`。</div>
                     </div>
                 </div>
                 <div class="guide-block">
@@ -688,7 +688,7 @@ client = OpenAI(
 )
 
 resp = client.chat.completions.create(
-    model="free-proxy/coding",
+    model="free-proxy/auto",
     messages=[{"role": "user", "content": "Reply with exactly OK"}],
 )
 print(resp.choices[0].message.content)</pre>
@@ -697,18 +697,14 @@ print(resp.choices[0].message.content)</pre>
                     <div class="guide-title">OpenClaw 关键配置</div>
                     <pre class="guide-code">provider id: free-proxy
 baseUrl: http://localhost:8765/v1
-models: auto, coding
-默认模型: free-proxy/auto
-编码场景推荐: free-proxy/coding</pre>
+models: auto
+默认模型: free-proxy/auto</pre>
                 </div>
                 <div class="guide-block">
                     <div class="guide-title">Opencode 验证方式</div>
                     <pre class="guide-code">配置路径: ~/.config/opencode/opencode.json
 provider id: free-proxy
 推荐命令:
-opencode run -m free-proxy/coding "Reply with exactly OK"
-
-保守命令:
 opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                 </div>
             </section>
@@ -798,6 +794,18 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             return data;
         }
 
+        function extractSseDataLine(part) {
+            const lines = String(part || '').split('\n');
+            for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line.startsWith('data:')) {
+                    continue;
+                }
+                return line.slice(5).trim();
+            }
+            return '';
+        }
+
         async function requestStream(url, options = {}, onChunk) {
             const response = await fetch(url, options);
             const contentType = response.headers.get('content-type') || '';
@@ -830,11 +838,10 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                 const parts = buffer.split('\n\n');
                 buffer = parts.pop() || '';
                 for (const part of parts) {
-                    const line = part.trim();
-                    if (!line.startsWith('data: ')) {
+                    const data = extractSseDataLine(part);
+                    if (!data) {
                         continue;
                     }
-                    const data = line.slice(6).trim();
                     if (data === '[DONE]') {
                         continue;
                     }

@@ -13,9 +13,16 @@ This project is best for:
 ## What you get
 
 - A local OpenAI-compatible base URL: `http://127.0.0.1:8765/v1`
-- Two stable model aliases: `free-proxy/auto`, `free-proxy/coding`
+- One stable model alias: `free-proxy/auto`
 - Automatic provider fallback when one model fails
 - A local web page for API key setup, so you do not need to edit config files by hand
+
+## Stable public surface
+
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- The only public model alias is `free-proxy/auto`
+- Legacy `coding` inputs are still recognized, but they now return HTTP 400 with `code="model_deprecated"`
 
 ## Install free-proxy
 
@@ -71,7 +78,6 @@ If you only want the fastest path, start with Longcat.
 If you only remember one rule:
 
 - Not sure: `free-proxy/auto`
-- Mostly coding: `free-proxy/coding`
 
 ## Troubleshooting logs
 
@@ -79,6 +85,37 @@ If you want more detailed debugging output, start with:
 
 ```bash
 uv run free-proxy serve --debug
+```
+
+## Streaming verification note
+
+If your shell has `http_proxy` or `https_proxy` set, also set:
+
+```bash
+NO_PROXY=127.0.0.1,localhost
+```
+
+or temporarily clear proxy variables before testing the local server.
+
+Otherwise tools like `curl` or `opencode` may go through a local proxy, receive injected `Connection: keep-alive` or `Proxy-Connection: keep-alive` headers, and incorrectly look like the SSE stream never closed.
+
+## OpenAI-compatible examples
+
+```bash
+curl -s http://127.0.0.1:8765/v1/models
+
+curl -s -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}]}'
+```
+
+For streaming checks, explicitly bypass proxies:
+
+```bash
+NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= \
+curl -N -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}],"stream":true}'
 ```
 
 ## FAQ

@@ -10,7 +10,7 @@ from python_scripts.opencode_config import configure_opencode_provider, detect_o
 
 
 class OpencodeConfigTests(unittest.TestCase):
-    def test_configure_creates_provider_with_auto_and_coding(self) -> None:
+    def test_configure_creates_provider_with_auto_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             old = os.environ.get('OPENCODE_TEST_DIR')
             os.environ['OPENCODE_TEST_DIR'] = tmp
@@ -28,7 +28,7 @@ class OpencodeConfigTests(unittest.TestCase):
                 self.assertEqual(provider.get('name'), 'free-proxy')
                 self.assertEqual(provider.get('options', {}).get('baseURL'), 'http://localhost:8765/v1')
                 models = provider.get('models', {})
-                self.assertEqual(sorted(models.keys()), ['auto', 'coding'])
+                self.assertEqual(sorted(models.keys()), ['auto'])
             finally:
                 if old is None:
                     os.environ.pop('OPENCODE_TEST_DIR', None)

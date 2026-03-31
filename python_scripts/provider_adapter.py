@@ -13,6 +13,15 @@ from .provider_transport import Transport, UrlLibTransport, build_url
 JsonObject = dict[str, object]
 
 
+@dataclass(frozen=True)
+class AdapterResponse:
+    status: int
+    headers: dict[str, str]
+    body: bytes | None
+    stream: Iterable[bytes] | None
+    content_type: str
+
+
 @dataclass
 class ProviderAdapter:
     provider: ProviderMeta
@@ -208,6 +217,31 @@ class ProviderAdapter:
             )
         return status, headers, chunks
 
+    def forward_chat(self, payload: JsonObject) -> AdapterResponse:
+        if self.provider.format == 'openai':
+            if bool(payload.get('stream')):
+                status, headers, stream = self.chat_completions_stream(payload)
+                content_type = str(headers.get('Content-Type') or headers.get('content-type') or '')
+                return AdapterResponse(status, headers, None, stream, content_type)
+            status, headers, body = self.chat_completions_raw(payload)
+            content_type = str(headers.get('Content-Type') or headers.get('content-type') or '')
+            return AdapterResponse(status, headers, body, None, content_type)
+
+        prompt = self._prompt_from_payload(payload)
+        max_tokens = payload.get('max_tokens')
+        token_limit = int(max_tokens) if isinstance(max_tokens, int) else 256
+        if self.provider.format == 'gemini':
+            request_payload: JsonObject = {
+                'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+                'generationConfig': {'temperature': 0, 'maxOutputTokens': token_limit},
+            }
+            path = f'/models/{self.normalize_model_id(str(payload.get("model", "")))}:generateContent'
+            status, headers, data = self._request_json('POST', path, request_payload, timeout=self._request_timeout_seconds_for_model(str(payload.get('model', ''))))
+            body = json.dumps(data, ensure_ascii=False).encode('utf-8') if not isinstance(data, str) else data.encode('utf-8')
+            return AdapterResponse(status, {'Content-Type': 'application/json; charset=utf-8', **headers}, body, None, 'application/json; charset=utf-8')
+
+        raise ProviderError('provider format is not supported')
+
     def normalize_model_id(self, model_id: str) -> str:
         if self.provider.format == 'gemini' and model_id.startswith('models/'):
             return model_id.removeprefix('models/')
@@ -241,6 +275,23 @@ class ProviderAdapter:
         if status >= 400:
             self._raise_http_error(status, data, '连通失败')
         return self._extract_gemini_text(data)
+
+    @staticmethod
+    def _prompt_from_payload(payload: JsonObject) -> str:
+        prompt = payload.get('prompt')
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt.strip()
+        messages = payload.get('messages')
+        if isinstance(messages, list):
+            parts: list[str] = []
+            for item in messages:
+                if isinstance(item, dict):
+                    content = item.get('content')
+                    if isinstance(content, str) and content.strip():
+                        parts.append(content.strip())
+            if parts:
+                return '\n'.join(parts)
+        return 'ok'
 
     def _request_timeout_seconds_for_path(self, path: str) -> int:
         marker = '/models/'

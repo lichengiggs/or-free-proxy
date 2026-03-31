@@ -26,25 +26,48 @@
   - `POST /v1/chat/completions`
 - 当前公开稳定模型别名：
   - `free-proxy/auto`
-  - `free-proxy/coding`
 - Python 服务端需要兼容的别名输入：
-  - `auto` / `coding`
-  - `free-proxy/auto` / `free-proxy/coding`
-  - `free_proxy/auto` / `free_proxy/coding`（仅旧配置迁移兼容，不再作为文档推荐写法）
+  - `auto`
+  - `free-proxy/auto`
+  - `free_proxy/auto`
+- Python 服务端仍需识别旧 `coding` 输入：
+  - `coding`
+  - `free-proxy/coding`
+  - `free_proxy/coding`
+  - 统一返回 HTTP 400 + `code="model_deprecated"`，不做静默回退。
 
 ## OpenClaw / Opencode 配置约定（长期有效）
 
 - OpenClaw 配置写入：
   - 文件：`python_scripts/openclaw_config.py`
   - provider id：`free-proxy`
-  - 写入模型：`auto`、`coding`
-  - 默认主模型仍保持 `free-proxy/auto`，避免破坏旧用户习惯。
+  - 写入模型：`auto`
+  - 若发现旧 `coding` 配置，只做迁移清理，不再写回。
 
 - Opencode 配置写入：
   - 文件：`python_scripts/opencode_config.py`
   - provider id：`free-proxy`
-  - 写入模型：`auto`、`coding`
+  - 写入模型：`auto`
+  - 若发现旧 `coding` 配置，只做迁移清理，不再写回。
   - 文档、示例、验证命令统一使用 `free-proxy/...`。
+
+## Relay 主链路沉淀（长期有效）
+
+- `/v1/chat/completions` 的统一主链路固定为：
+  - `python_scripts/request_normalizer.py`
+  - `python_scripts/provider_routing.py`
+  - `python_scripts/fallback_policy.py`
+  - `python_scripts/protocol_converter.py`
+  - `python_scripts/response_normalizer.py`
+  - `python_scripts/openai_relay.py`
+- 责任边界：
+  - `server.py` 只做 HTTP 入口、错误映射、结果写回。
+  - `openai_relay.py` 是唯一知道“候选尝试 -> fallback -> 最终收敛”的模块。
+  - `response_normalizer.py` 负责统一 OpenAI JSON / SSE 输出。
+  - `provider_adapter.py` 只做单次上游调用和原始响应包装，不做 fallback。
+- `requested_model` 只是内部路由偏好输入，不属于公开稳定模型面；对外文档不要把它写成用户必须理解的主接口。
+- `auto` 候选池必须同时考虑：用户指定模型、health、provider hints、静态 fallback；provider `/models` 若不稳定，必须保留 hints 兜底。
+- provider 动态列出的候选模型应在该 provider 静态默认候选失败后再懒加载，并立即插入当前 provider 后续位置，不要等所有 provider 都失败后再尝试。
 
 ## 本次 Longcat 接入沉淀（长期有效）
 
@@ -58,9 +81,10 @@
 - 控制台主流程固定为：先配置 provider，再选推荐模型，最后在同一工作区完成探测与聊天验证；不要再回到“分散多个结果面板”的设计。
 - 成功结果只保留一个主展示区，避免“诊断摘要 + 纯正文”重复显示同一份内容。
 - 诊断信息必须优先展示可操作字段：`action`、`provider`、`model`、`error`、`category`、`status`、`suggestion`；不要只给一句模糊失败。
-- 接入说明、README、页面文案必须统一引用真实稳定接口：`/v1/models`、`/v1/chat/completions`、`free-proxy/auto`、`free-proxy/coding`。不要把页面内部调试接口如 `/chat/completions` 写进对外文档。
+- 接入说明、README、页面文案必须统一引用真实稳定接口：`/v1/models`、`/v1/chat/completions`、`free-proxy/auto`。不要把页面内部调试接口如 `/chat/completions` 写进对外文档。
 - 遇到“长回复被截断”时，先检查上游请求参数和 provider 返回，尤其是 `max_tokens` / `maxOutputTokens`，不要先假设是前端滚动或 DOM 截断问题。
 - `probe` 和真实 `chat` 的输出预算必须分离：探测保持小输出，聊天按 provider 正常输出预算返回正文，避免把探测配置误复用到真实聊天。
+- 本地验证 `127.0.0.1` 流式链路时，如果 shell 配了 `http_proxy` / `https_proxy`，必须同时设置 `NO_PROXY=127.0.0.1,localhost` 或临时清空代理变量；否则代理可能注入 `Connection: keep-alive` / `Proxy-Connection: keep-alive`，把已正确结束的 SSE 误判成“服务端没关闭连接”。
 
 ## 测试与发布
 
@@ -95,9 +119,9 @@
 - 复杂功能或重构先写执行计划，规范见 `.agent/PLANS.md`。
 - 执行计划属于过程文档，任务完成后应清理；结论沉淀到长期文档。
 - 用户文档必须优先覆盖三条真实使用路径：
-  - OpenAI / Python SDK：`free-proxy/coding`
-  - OpenClaw：`free-proxy/coding`
-  - Opencode：`free-proxy/coding`
+  - OpenAI / Python SDK：`free-proxy/auto`
+  - OpenClaw：`free-proxy/auto`
+  - Opencode：`free-proxy/auto`
 
 ## 工具规范
 

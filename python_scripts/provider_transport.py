@@ -43,6 +43,11 @@ def build_url(base_url: str, path: str, query: dict[str, str] | None = None) -> 
 
 
 class UrlLibTransport:
+    @staticmethod
+    def _is_done_chunk(chunk: bytes) -> bool:
+        normalized = chunk.replace(b' ', b'')
+        return b'data:[DONE]' in normalized
+
     def request(
         self,
         method: str,
@@ -100,7 +105,10 @@ class UrlLibTransport:
                     pending.extend(line)
                     if line in {b'\n', b'\r\n'}:
                         if len(pending) > len(line):
-                            yield bytes(pending)
+                            chunk = bytes(pending)
+                            yield chunk
+                            if self._is_done_chunk(chunk):
+                                break
                         pending.clear()
             finally:
                 response.close()
