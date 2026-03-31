@@ -11,7 +11,7 @@ from .provider_errors import ProviderError
 from .provider_routing import CandidateTarget, build_auto_candidates
 from .protocol_converter import gemini_json_to_openai_chat
 from .request_normalizer import ChatRequest, normalize_chat_request
-from .response_normalizer import RelayResponse, normalize_json_success, normalize_sse_success, sanitize_model_text
+from .response_normalizer import RelayResponse, normalize_provider_response, sanitize_model_text
 from .token_policy import model_default_output_tokens, response_token_budget, trim_prompt
 
 
@@ -216,11 +216,14 @@ class OpenAIRelay:
                 continue
             if adapter_response.status < 400:
                 self._record_health(candidate.provider, candidate.model, True, None)
-                parsed = json.loads((adapter_response.body or b'{}').decode('utf-8'))
-                content = self._extract_openai_text(parsed)
-                if request.stream and adapter_response.body is not None:
-                    return normalize_sse_success(provider=candidate.provider, model=candidate.model, body=adapter_response.body)
-                return normalize_json_success(provider=candidate.provider, model=candidate.model, content=content)
+                if adapter_response.body is None:
+                    return RelayResponse(200, {'Content-Type': 'application/json; charset=utf-8'}, b'', None)
+                return normalize_provider_response(
+                    provider=candidate.provider,
+                    model=candidate.model,
+                    body=adapter_response.body,
+                    stream=request.stream,
+                )
             failure = classify_error(adapter_response.status, (adapter_response.body or b'').decode('utf-8', errors='ignore'))
             self._record_health(candidate.provider, candidate.model, False, failure.category)
             if candidate.provider not in listed_loaded:
