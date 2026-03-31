@@ -32,7 +32,7 @@ class MatrixTransport:
 
 
 class ProviderMatrixTests(unittest.TestCase):
-    def test_every_provider_has_spec_and_smoke_flow(self) -> None:
+    def test_every_provider_can_list_and_chat(self) -> None:
         for provider in list_providers():
             with self.subTest(provider=provider.name):
                 os.environ[provider.api_key_env] = 'test-key'

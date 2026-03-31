@@ -23,6 +23,7 @@ This project is best for:
 - `POST /v1/chat/completions`
 - The only public model alias is `free-proxy/auto`
 - Legacy `coding` inputs are still recognized, but they now return HTTP 400 with `code="model_deprecated"`
+- The model you pick in the web page is stored locally in `data/preferred-model.json` and becomes the first preference for `free-proxy/auto`
 
 ## Install free-proxy
 

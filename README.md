@@ -23,6 +23,7 @@
 - `POST /v1/chat/completions`
 - 公开模型只保留：`free-proxy/auto`
 - 旧 `coding` 输入仍会被识别，但统一返回 HTTP 400，错误码 `model_deprecated`
+- 用户在页面里选中的模型偏好会写入本地 `data/preferred-model.json`，并优先影响 `free-proxy/auto`
 
 ## 安装 free-proxy
 

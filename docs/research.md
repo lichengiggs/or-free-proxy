@@ -92,7 +92,8 @@
 - probe 使用小输出预算，真实 chat 使用常规输出预算
 - token limit 错误会写入本地 `data/token-limits.json` 并自动重试一次
 - 健康状态会写入本地 `data/model-health.json`
-- 这两个文件是运行时状态，不入库
+- 前端选中的模型偏好会写入本地 `data/preferred-model.json`
+- 这三个文件都是运行时状态，不入库
 - provider `/models` 不稳定时，路由仍需保留 `model_hints` 兜底
 - provider 动态列出的候选模型会在当前 provider 静态默认模型失败后再懒加载，不等所有 provider 都失败
 
