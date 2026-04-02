@@ -69,7 +69,7 @@ class ProxyService:
         health_path: Path | None = None,
         preferred_model_path: Path | None = None,
         token_limit_path: Path | None = None,
-        health_ttl_seconds: int = 600,
+        health_ttl_seconds: int | None = None,
         dotenv_path: Path | None = None,
         request_timeout_seconds: int = 12,
         outbound_rpm: int = 60,
@@ -81,7 +81,7 @@ class ProxyService:
         self.health_path = health_path
         self.preferred_model_path = preferred_model_path
         self.token_limit_path = token_limit_path
-        self.health_ttl_seconds = health_ttl_seconds
+        self.health_ttl_seconds = health_ttl_seconds if health_ttl_seconds is not None else 600
         self.request_timeout_seconds = request_timeout_seconds
         self.request_limiter = RequestLimiterGate(outbound_rpm, 60)
         self.debug_log = debug_log
@@ -378,71 +378,6 @@ class ProxyService:
         request_payload['model'] = normalized_model
         return normalized_model, request_payload
 
-    @staticmethod
-    def _stream_text_delta(choice: object) -> dict[str, str]:
-        if not isinstance(choice, dict):
-            return {}
-        message = choice.get('message')
-        if isinstance(message, dict):
-            content = message.get('content')
-            if isinstance(content, str) and content:
-                return {'role': str(message.get('role') or 'assistant'), 'content': content}
-            reasoning = message.get('reasoning_content')
-            if isinstance(reasoning, str) and reasoning:
-                return {'role': str(message.get('role') or 'assistant'), 'reasoning_content': reasoning}
-            if isinstance(content, list):
-                chunks: list[str] = []
-                for item in content:
-                    if isinstance(item, dict):
-                        text = item.get('text')
-                        if isinstance(text, str) and text:
-                            chunks.append(text)
-                merged = ''.join(chunks)
-                if merged:
-                    return {'role': str(message.get('role') or 'assistant'), 'content': merged}
-        text = choice.get('text')
-        if isinstance(text, str) and text:
-            return {'role': 'assistant', 'content': text}
-        return {}
-
-    def _wrap_openai_body_as_sse(self, fallback_model: str, body: bytes) -> Iterable[bytes]:
-        parsed = json.loads(body.decode('utf-8'))
-        if not isinstance(parsed, dict):
-            yield from self._sse_done_chunk()
-            return
-        choices = parsed.get('choices')
-        first_choice = choices[0] if isinstance(choices, list) and choices else {}
-        chunk_id = str(parsed.get('id', f'chatcmpl-{int(time.time())}'))
-        created_raw = parsed.get('created')
-        created = created_raw if isinstance(created_raw, int) else int(time.time())
-        actual_model = str(parsed.get('model') or fallback_model)
-        delta = self._stream_text_delta(first_choice)
-        if delta:
-            yield self._sse_json_line(
-                {
-                    'id': chunk_id,
-                    'object': 'chat.completion.chunk',
-                    'created': created,
-                    'model': actual_model,
-                    'choices': [{'index': 0, 'delta': delta, 'finish_reason': None}],
-                }
-            )
-        finish_reason = 'stop'
-        if isinstance(first_choice, dict):
-            raw_finish_reason = first_choice.get('finish_reason')
-            if isinstance(raw_finish_reason, str) and raw_finish_reason:
-                finish_reason = raw_finish_reason
-        yield self._sse_json_line(
-            {
-                'id': chunk_id,
-                'object': 'chat.completion.chunk',
-                'created': created,
-                'model': actual_model,
-                'choices': [{'index': 0, 'delta': {}, 'finish_reason': finish_reason}],
-            }
-        )
-        yield from self._sse_done_chunk()
-
     def execute_openai_target(self, target: ResolvedOpenAIRequest, payload: JsonObject) -> OpenAIForwardResult:
         if target.alias is not None:
             return self.forward_alias_chat(target.alias, payload)
@@ -545,10 +480,18 @@ class ProxyService:
         if not isinstance(request_payload.get('messages'), list) or not request_payload.get('messages'):
             request_payload['messages'] = [{'role': 'user', 'content': budget.trimmed_prompt}]
             request_payload.pop('prompt', None)
-        request_payload['stream'] = False
+
+        requested_stream = bool(payload.get('stream'))
+        capabilities = get_model_capabilities(provider_name, normalized_model_id)
+        upstream_stream = requested_stream and capabilities.get('streaming', False)
+        request_payload['stream'] = upstream_stream
 
         try:
-            status, headers, body = adapter.chat_completions_raw(request_payload)
+            if upstream_stream:
+                status, headers, stream_iter = adapter.chat_completions_stream(request_payload)
+            else:
+                status, headers, body = adapter.chat_completions_raw(request_payload)
+                stream_iter = None
         except ProviderError as exc:
             category = classify_error(0, str(exc)).category
             return OpenAIForwardResult(
@@ -565,9 +508,14 @@ class ProxyService:
 
         if status < 400:
             upsert_health(provider_name, normalized_model_id, True, path=self.health_path)
+            if upstream_stream:
+                return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=None, stream_chunks=stream_iter)
             return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=body)
 
-        text = body.decode('utf-8', errors='ignore')
+        if upstream_stream:
+            text = ''
+        else:
+            text = body.decode('utf-8', errors='ignore')
         failure = classify_error(status, text)
         upsert_health(provider_name, normalized_model_id, False, reason=failure.category, path=self.health_path)
         if self.debug_log is not None:
@@ -592,36 +540,9 @@ class ProxyService:
             suggestion=remediation_suggestion(failure.category, provider_name),
         )
 
-    @staticmethod
-    def _message_to_text(value: object) -> str:
-        if isinstance(value, str):
-            return value.strip()
-        if isinstance(value, list):
-            texts: list[str] = []
-            for item in value:
-                if isinstance(item, dict):
-                    text = item.get('text')
-                    if isinstance(text, str) and text.strip():
-                        texts.append(text.strip())
-            return '\n'.join(texts).strip()
-        return ''
-
     def _extract_prompt(self, payload: JsonObject) -> str:
-        prompt_value = payload.get('prompt')
-        if isinstance(prompt_value, str) and prompt_value.strip():
-            return prompt_value.strip()
-        messages = payload.get('messages')
-        if isinstance(messages, list):
-            chunks: list[str] = []
-            for item in messages:
-                if not isinstance(item, dict):
-                    continue
-                text = self._message_to_text(item.get('content'))
-                if text:
-                    chunks.append(text)
-            if chunks:
-                return '\n'.join(chunks).strip()
-        return 'ok'
+        from .prompt_utils import extract_prompt
+        return extract_prompt(payload)
 
     @staticmethod
     def _requested_output_tokens(payload: JsonObject) -> int | None:

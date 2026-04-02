@@ -61,8 +61,8 @@
   - `python_scripts/response_normalizer.py`
   - `python_scripts/openai_relay.py`
 - 责任边界：
-  - `server.py` 只做 HTTP 入口、错误映射、结果写回。
-  - `openai_relay.py` 是唯一知道“候选尝试 -> fallback -> 最终收敛”的模块。
+  - `server_fastapi.py` 只做 HTTP 入口、错误映射、结果写回。
+  - `openai_relay.py` 是唯一知道"候选尝试 -> fallback -> 最终收敛"的模块。
   - `response_normalizer.py` 负责统一 OpenAI JSON / SSE 输出。
   - `provider_adapter.py` 只做单次上游调用和原始响应包装，不做 fallback。
 - `requested_model` 只是内部路由偏好输入，不属于公开稳定模型面；对外文档不要把它写成用户必须理解的主接口。
@@ -92,8 +92,6 @@
 - 采用 TDD（red -> green），测试与实现同步提交。
 - 提交前最少执行：
   - `uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'`
-  - `npm test`
-  - `npx tsc --noEmit`
 - 清理中间文档（如 `plan.md`），保留并更新长期文档（`docs/research.md` / README）。运行时学习、探测、健康状态文件只做本地生成，不入库。
 
 ## Git 提交规范

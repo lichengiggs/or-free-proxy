@@ -148,7 +148,8 @@ class HttpxTransport:
                 raise ProviderHTTPError(message=failure.message, status=status, category=failure.category)
             return status, response_headers, [response_body]
 
-        client = httpx.Client(verify=verify, timeout=timeout, follow_redirects=True)
+        httpx_timeout = httpx.Timeout(connect=min(timeout, 15), read=max(timeout, 300), write=min(timeout, 15), pool=5)
+        client = httpx.Client(verify=verify, timeout=httpx_timeout, follow_redirects=True)
         request = client.build_request(method, url, headers=headers or {}, content=body)
         try:
             response = client.send(request, stream=True)

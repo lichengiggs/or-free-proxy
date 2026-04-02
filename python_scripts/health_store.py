@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -11,6 +14,7 @@ from cachetools import TTLCache
 DEFAULT_HEALTH_PATH = Path('data/model-health.json')
 HealthState = dict[str, dict[str, object]]
 _HEALTH_CACHE: TTLCache[str, HealthState] = TTLCache(maxsize=8, ttl=30)
+_HEALTH_LOCK = threading.Lock()
 
 
 def _clone_state(data: HealthState) -> HealthState:
@@ -43,7 +47,15 @@ def save_health(data: HealthState, path: Path | None = None) -> None:
     target = path or DEFAULT_HEALTH_PATH
     _HEALTH_CACHE[str(target)] = _clone_state(data)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    with _HEALTH_LOCK:
+        fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, str(target))
+        except Exception:
+            os.unlink(tmp_path)
+            raise
 
 
 def upsert_health(

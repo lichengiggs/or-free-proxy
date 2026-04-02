@@ -41,10 +41,10 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'openai',
         model_hints=('LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'),
         model_capabilities={
-            'LongCat-Flash-Chat': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 4096, 'default_timeout_seconds': 12},
-            'LongCat-Flash-Lite': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 2048, 'default_timeout_seconds': 12},
-            'LongCat-Flash-Thinking': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 30},
-            'LongCat-Flash-Thinking-2601': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 30},
+            'LongCat-Flash-Chat': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 4096, 'default_timeout_seconds': 60},
+            'LongCat-Flash-Lite': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 2048, 'default_timeout_seconds': 60},
+            'LongCat-Flash-Thinking': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 120},
+            'LongCat-Flash-Thinking-2601': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 120},
         },
     ),
     ProviderMeta(

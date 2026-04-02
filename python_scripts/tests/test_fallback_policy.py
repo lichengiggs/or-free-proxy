@@ -27,3 +27,30 @@ class FallbackPolicyTests(unittest.TestCase):
         context = FallbackContext(attempt_count=1, same_provider_attempts=0)
         decision = decide_next_action(context, RelayAttemptResult(False, 'auth'))
         self.assertEqual(decision.action, 'stop')
+
+    def test_network_error_moves_to_next_candidate(self) -> None:
+        context = FallbackContext(attempt_count=1, same_provider_attempts=0)
+        decision = decide_next_action(context, RelayAttemptResult(False, 'network'))
+        self.assertEqual(decision.action, 'next_candidate')
+
+    def test_retry_same_provider_when_under_limit(self) -> None:
+        context = FallbackContext(attempt_count=1, same_provider_attempts=1)
+        decision = decide_next_action(context, RelayAttemptResult(False, 'token_limit'))
+        self.assertEqual(decision.action, 'retry_same_provider')
+
+    def test_stops_when_same_provider_attempts_exceeded(self) -> None:
+        context = FallbackContext(attempt_count=3, same_provider_attempts=3)
+        decision = decide_next_action(context, RelayAttemptResult(False, 'token_limit'))
+        # same_provider_attempts=3 >= max_same_provider_attempts=2, so moves to next_candidate
+        # But attempt_count=3 < max_total_attempts=5, so doesn't stop yet
+        self.assertEqual(decision.action, 'next_candidate')
+
+    def test_stops_when_total_attempts_exceeded(self) -> None:
+        context = FallbackContext(attempt_count=6, same_provider_attempts=0)
+        decision = decide_next_action(context, RelayAttemptResult(False, 'rate_limit'))
+        self.assertEqual(decision.action, 'stop')
+
+    def test_success_returns_stop(self) -> None:
+        context = FallbackContext(attempt_count=1, same_provider_attempts=0)
+        decision = decide_next_action(context, RelayAttemptResult(True, None))
+        self.assertEqual(decision.action, 'stop')

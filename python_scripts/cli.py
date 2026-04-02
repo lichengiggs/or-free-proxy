@@ -9,8 +9,9 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from python_scripts.server import run
+from python_scripts.server_fastapi import app as fastapi_app
 from python_scripts.service import ProxyService
+import uvicorn
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,7 +39,16 @@ def main(argv: list[str] | None = None) -> int:
     service = ProxyService()
 
     if args.command == 'serve':
-        run(debug=bool(getattr(args, 'debug', False)))
+        debug = bool(getattr(args, 'debug', False))
+        log_level = 'debug' if debug else 'info'
+        from python_scripts.server_fastapi import set_debug
+        set_debug(debug)
+        uvicorn.run(
+            'python_scripts.server_fastapi:app',
+            host='127.0.0.1',
+            port=8765,
+            log_level=log_level,
+        )
         return 0
 
     if args.command == 'providers':

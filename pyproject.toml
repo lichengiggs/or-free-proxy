@@ -7,8 +7,10 @@ dependencies = [
     "aiolimiter>=1.2.1",
     "cachetools>=5.5.2",
     "certifi>=2024.0.0",
+    "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "tenacity>=9.0.0",
+    "uvicorn[standard]>=0.34.0",
 ]
 
 [project.scripts]

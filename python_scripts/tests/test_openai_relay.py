@@ -164,41 +164,24 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertIn(b'ok-stream', chunks[0])
         self.assertEqual(chunks[-1], b'data: [DONE]\n\n')
 
-    def test_relay_forces_non_stream_upstream_even_when_client_requests_stream(self) -> None:
-        class StreamSensitiveAdapter:
-            def __init__(self) -> None:
-                self.stream_values: list[bool] = []
-
+    def test_relay_wraps_json_response_as_sse_when_client_requests_stream(self) -> None:
+        """Verify that when client requests stream=True, relay wraps JSON response as SSE."""
+        class JsonAdapter:
             def forward_chat(self, payload: dict[str, object]):
-                stream_value = bool(payload.get('stream'))
-                self.stream_values.append(stream_value)
-                if stream_value:
-                    return type(
-                        'AdapterResponse',
-                        (),
-                        {
-                            'status': 200,
-                            'headers': {'Content-Type': 'text/event-stream; charset=utf-8'},
-                            'body': None,
-                            'stream': iter([b'data: {"choices":[{"delta":{"content":"ignored"}}]}\n\n', b'data: [DONE]\n\n']),
-                            'content_type': 'text/event-stream; charset=utf-8',
-                        },
-                    )()
                 return type(
                     'AdapterResponse',
                     (),
                     {
                         'status': 200,
                         'headers': {'Content-Type': 'application/json; charset=utf-8'},
-                        'body': b'{"choices":[{"message":{"content":"ok-non-stream"}}]}',
+                        'body': b'{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"longcat/LongCat-Flash-Lite","choices":[{"index":0,"message":{"role":"assistant","content":"ok-non-stream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}',
                         'stream': None,
                         'content_type': 'application/json; charset=utf-8',
                     },
                 )()
 
-        adapter = StreamSensitiveAdapter()
         relay = OpenAIRelay(
-            adapter_factory=lambda provider: adapter,
+            adapter_factory=lambda provider: JsonAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
             configured_providers_loader=lambda: ['longcat'],
@@ -208,7 +191,6 @@ class OpenAIRelayTests(unittest.TestCase):
         response = relay.handle_chat(request)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(adapter.stream_values, [False])
         self.assertIsNone(response.body)
         self.assertIsNotNone(response.stream_chunks)
         chunks = list(response.stream_chunks or [])
@@ -536,3 +518,22 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertIsNotNone(response.stream_chunks)
         chunks = list(response.stream_chunks or [])
         self.assertIn(b'ok-longcat', chunks[0])
+
+    def test_relay_forces_stream_false_upstream_even_when_client_requests_stream(self) -> None:
+        """Verify that relay always forces stream=False upstream, protecting fallback semantics."""
+        stream_values: list[bool] = []
+
+        class StreamCheckAdapter:
+            def forward_chat(self, payload: dict[str, object]):
+                stream_values.append(bool(payload.get('stream')))
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: StreamCheckAdapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['longcat'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
+        relay.handle_chat(request)
+        self.assertEqual(stream_values, [False])

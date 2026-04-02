@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DOTENV_PATH = ROOT_DIR / '.env'
+
+
+@dataclass
+class Settings:
+    host: str = '127.0.0.1'
+    port: int = 8765
+    health_ttl: int = 600
+    max_fallback_attempts: int = 5
+    max_same_provider_attempts: int = 3
+    max_input_chars: int = 32000
+
+
+settings = Settings()
 
 
 def load_dotenv(path: Path = DOTENV_PATH) -> dict[str, str]:

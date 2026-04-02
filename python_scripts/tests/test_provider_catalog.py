@@ -36,4 +36,25 @@ class ProviderCatalogTests(unittest.TestCase):
         self.assertTrue(thinking['reasoning'])
         self.assertFalse(chat['reasoning'])
         self.assertEqual(thinking['default_output_tokens'], 1024)
-        self.assertEqual(thinking['default_timeout_seconds'], 30)
+        self.assertEqual(thinking['default_timeout_seconds'], 120)
+
+    def test_all_providers_have_required_fields(self) -> None:
+        for p in PROVIDERS:
+            self.assertTrue(p.name, f'{p} missing name')
+            self.assertTrue(p.base_url, f'{p} missing base_url')
+            self.assertTrue(p.api_key_env, f'{p} missing api_key_env')
+            self.assertTrue(p.model_hints, f'{p} missing model_hints')
+
+    def test_thinking_model_has_long_running_flag(self) -> None:
+        caps = get_model_capabilities('longcat', 'LongCat-Flash-Thinking-2601')
+        self.assertTrue(caps.get('long_running'))
+
+    def test_non_thinking_model_has_no_long_running_flag(self) -> None:
+        caps = get_model_capabilities('longcat', 'LongCat-Flash-Chat')
+        self.assertFalse(caps.get('long_running', False))
+
+    def test_model_hints_returns_list(self) -> None:
+        from python_scripts.provider_catalog import get_provider_model_hints
+        hints = get_provider_model_hints('longcat')
+        self.assertIsInstance(hints, list)
+        self.assertGreater(len(hints), 0)

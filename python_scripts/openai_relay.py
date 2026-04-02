@@ -101,7 +101,8 @@ class OpenAIRelay:
 
     @classmethod
     def _trim_messages_for_provider(cls, provider: str, messages: list[dict[str, object]]) -> list[dict[str, object]]:
-        policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=256))
+        from .config import settings
+        policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=settings.max_input_chars, reserve_output_tokens=256))
         if not messages:
             return []
 
