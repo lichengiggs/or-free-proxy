@@ -5,7 +5,6 @@ import logging
 import os
 import sys
 import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import httpx
@@ -46,6 +45,28 @@ def get_service() -> ProxyService:
     if _service is None:
         _service = ProxyService(debug_log=_debug_log)
     return _service
+
+
+def _invalid_json_response(*, openai: bool = False) -> JSONResponse:
+    if openai:
+        return JSONResponse(
+            {'error': {'message': 'invalid json', 'type': 'invalid_request_error', 'param': None, 'code': None}},
+            status_code=400,
+        )
+    return JSONResponse({'ok': False, 'error': 'invalid json'}, status_code=400)
+
+
+async def _read_json_payload(request: Request, *, openai: bool = False) -> tuple[dict[str, object] | None, JSONResponse | None]:
+    body = await request.body()
+    if not body:
+        return {}, None
+    try:
+        payload = json.loads(body.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, _invalid_json_response(openai=openai)
+    if not isinstance(payload, dict):
+        return None, _invalid_json_response(openai=openai)
+    return payload, None
 
 
 def set_debug(enabled: bool) -> None:
@@ -113,7 +134,9 @@ async def get_preferred_model():
 
 @app.post('/api/preferred-model')
 async def save_preferred_model(request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request)
+    if error_response is not None:
+        return error_response
     provider = str(payload.get('provider', '')).strip()
     model = str(payload.get('model', '')).strip()
     if not provider or not model:
@@ -173,7 +196,9 @@ async def verify_provider_key(provider: str):
 
 @app.post('/api/configure-openclaw')
 async def configure_openclaw(request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request)
+    if error_response is not None:
+        return error_response
     mode = str(payload.get('mode', '')).strip()
     if mode not in {'default', 'fallback'}:
         return JSONResponse({'success': False, 'error': 'Invalid mode'}, status_code=400)
@@ -214,7 +239,9 @@ async def configure_opencode(request: Request):
 
 @app.post('/api/restore-backup')
 async def restore_backup_route(request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request)
+    if error_response is not None:
+        return error_response
     backup = str(payload.get('backup', '')).strip()
     if not backup:
         return JSONResponse({'success': False, 'error': 'Backup filename is required'}, status_code=400)
@@ -226,7 +253,9 @@ async def restore_backup_route(request: Request):
 
 @app.post('/api/provider-keys/{provider}')
 async def save_provider_key(provider: str, request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request)
+    if error_response is not None:
+        return error_response
     api_key = str(payload.get('api_key', '')).strip()
     if not api_key:
         return JSONResponse({'ok': False, 'error': 'missing api_key'}, status_code=400)
@@ -240,7 +269,9 @@ async def save_provider_key(provider: str, request: Request):
 
 @app.post('/providers/{provider}/probe')
 async def probe_provider(provider: str, request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request)
+    if error_response is not None:
+        return error_response
     model = str(payload.get('model', '')).strip()
     if not model:
         return JSONResponse({'ok': False, 'error': 'missing model'}, status_code=400)
@@ -272,7 +303,9 @@ async def probe_provider(provider: str, request: Request):
 
 @app.post('/chat/completions')
 async def legacy_chat_completions(request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request)
+    if error_response is not None:
+        return error_response
     provider = str(payload.get('provider', '')).strip()
     model = str(payload.get('model', '')).strip()
     if not provider or not model:
@@ -329,7 +362,7 @@ async def legacy_chat_completions(request: Request):
                         )
                     return JSONResponse({'ok': False, 'error': 'upstream returned invalid JSON'}, status_code=502)
             if result.ok and not result.body and result.content:
-                return {'ok': True, 'provider': provider, 'model': model, 'actual_model': result.actual_model or model, 'content': result.content}
+                return {'ok': True, 'provider': provider, 'model': model, 'actual_model': result.model or model, 'content': result.content}
             if not result.ok:
                 if _debug_enabled:
                     _debug_log(
@@ -385,7 +418,9 @@ async def legacy_chat_completions(request: Request):
 
 @app.post('/v1/chat/completions')
 async def openai_chat_completions(request: Request):
-    payload = await request.json()
+    payload, error_response = await _read_json_payload(request, openai=True)
+    if error_response is not None:
+        return error_response
     user_agent = request.headers.get('User-Agent', '')
     client_hint = 'opencode' if 'opencode' in user_agent.lower() else 'openclaw' if 'openclaw' in user_agent.lower() else ''
     try:
@@ -410,11 +445,11 @@ async def openai_chat_completions(request: Request):
             headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'},
         )
     if result.body is not None:
-        return JSONResponse(content=json.loads(result.body), headers=dict(result.headers))
+        return JSONResponse(content=json.loads(result.body), status_code=result.status or 200, headers=dict(result.headers))
     return JSONResponse(content=b'', status_code=result.status or 200)
 
 
-async def _iter_chunks(chunks):
+def _iter_chunks(chunks):
     for chunk in chunks:
         yield chunk
 

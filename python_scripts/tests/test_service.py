@@ -313,6 +313,21 @@ class JsonFallbackStreamTransport(StreamHttpTransport):
         ])
 
 
+class ErrorBodyStreamTransport(StreamHttpTransport):
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        self.requests.append((method, url, headers, body, timeout))
+        return 401, {'Content-Type': 'application/json; charset=utf-8'}, iter([
+            json.dumps({'error': {'message': 'invalid api key'}}).encode('utf-8')
+        ])
+
+
 class ServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.env_keys = [
@@ -693,3 +708,18 @@ class ServiceTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertTrue(any(event == 'request_failed' for event, _ in logs))
+
+    def test_forward_direct_chat_keeps_upstream_error_body_for_stream_failures(self) -> None:
+        os.environ['LONGCAT_API_KEY'] = 'test'
+        service = self.make_service(ErrorBodyStreamTransport())
+
+        result = service.forward_direct_chat(
+            'longcat',
+            'LongCat-Flash-Chat',
+            {'provider': 'longcat', 'model': 'LongCat-Flash-Chat', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]},
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, 401)
+        self.assertEqual(result.category, 'auth')
+        self.assertIn('invalid api key', result.error or '')

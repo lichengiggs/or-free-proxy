@@ -16,6 +16,7 @@
 - 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
+- 常见可用额度选项：Longcat 一般最省心，Gemini / Mistral / GitHub Models / SambaNova 可做备选
 
 ## 当前稳定接口
 
@@ -24,6 +25,7 @@
 - 公开模型只保留：`free-proxy/auto`
 - 旧 `coding` 输入仍会被识别，但统一返回 HTTP 400，错误码 `model_deprecated`
 - 用户在页面里选中的模型偏好会写入本地 `data/preferred-model.json`，并优先影响 `free-proxy/auto`
+- `/chat/completions` 只作为网页调试入口，不是对外主接口
 
 ## 安装 free-proxy
 
@@ -113,7 +115,7 @@ curl -s -X POST http://127.0.0.1:8765/v1/chat/completions \
 `/v1/chat/completions` 的当前行为是：
 
 - 默认返回普通 JSON
-- 如果请求里带 `"stream": true`，服务端会把完整结果包装成最小 SSE 返回，兼容 `opencode` 这类按流式消费的客户端
+- 如果请求里带 `"stream": true`，服务端会把结果包装成 SSE 返回，兼容 `opencode` 这类按流式消费的客户端
 
 普通 JSON 示例：
 
@@ -148,6 +150,10 @@ opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly O
 ### 没有可用模型
 
 先换一个推荐模型再试。
+
+### Gemini 能配好但聊天失败
+
+先点一次“探测”。如果还是失败，换成上面推荐表里的 Gemini 模型再试。
 
 ### API Key 存在哪里
 

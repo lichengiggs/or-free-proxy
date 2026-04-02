@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import inspect
 import json
 import os
 import tempfile
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from python_scripts.cli import build_parser
 from python_scripts.service import OpenAIForwardResult, ProxyService
-from python_scripts.server_fastapi import app, get_service, _service
+from python_scripts.server_fastapi import _iter_chunks, app, get_service, _service
 
 
 @dataclass
@@ -262,6 +263,69 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('chat.completion.chunk', resp.text)
         self.assertIn('data: ', resp.text)
 
+    def test_openai_chat_completion_preserves_relay_error_status(self) -> None:
+        class RelayErrorService(FakeService):
+            class _Relay(FakeService._Relay):
+                def handle_chat(self, request):
+                    del request
+                    return type(
+                        'RelayResponse',
+                        (),
+                        {
+                            'status': 502,
+                            'headers': {'Content-Type': 'application/json; charset=utf-8'},
+                            'body': json.dumps({'error': {'message': 'all candidates failed'}}).encode('utf-8'),
+                            'stream_chunks': None,
+                        },
+                    )()
+
+        import python_scripts.server_fastapi as sf
+
+        sf._service = RelayErrorService()
+        client = TestClient(app)
+        resp = client.post(
+            '/v1/chat/completions',
+            json={'model': 'free-proxy/auto', 'messages': [{'role': 'user', 'content': 'hello'}]},
+        )
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()['error']['message'], 'all candidates failed')
+
+    def test_preferred_model_route_returns_400_for_invalid_json(self) -> None:
+        client = TestClient(app)
+        resp = client.post(
+            '/api/preferred-model',
+            content=b'{',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {'ok': False, 'error': 'invalid json'})
+
+    def test_legacy_chat_completion_returns_400_for_invalid_json(self) -> None:
+        client = TestClient(app)
+        resp = client.post(
+            '/chat/completions',
+            content=b'{',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {'ok': False, 'error': 'invalid json'})
+
+    def test_openai_chat_completion_returns_openai_style_400_for_invalid_json(self) -> None:
+        client = TestClient(app)
+        resp = client.post(
+            '/v1/chat/completions',
+            content=b'{',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()['error']['message'], 'invalid json')
+        self.assertEqual(resp.json()['error']['type'], 'invalid_request_error')
+
+    def test_iter_chunks_returns_sync_iterable(self) -> None:
+        chunks = _iter_chunks(iter([b'a', b'b']))
+        self.assertFalse(inspect.isasyncgen(chunks))
+        self.assertEqual(list(chunks), [b'a', b'b'])
+
     def test_legacy_chat_completion_stream_mode_returns_sse(self) -> None:
         client = TestClient(app)
         resp = client.post(
@@ -271,6 +335,32 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('text/event-stream', resp.headers.get('content-type', ''))
         self.assertIn('data: ', resp.text)
+
+    def test_legacy_chat_completion_stream_mode_handles_non_openai_provider_content_result(self) -> None:
+        class GeminiLegacyService(FakeService):
+            def forward_direct_chat(self, provider: str, model: str, payload: dict[str, object]) -> OpenAIForwardResult:
+                del payload
+                return OpenAIForwardResult(
+                    ok=True,
+                    provider=provider,
+                    model='gemini-actual-model',
+                    status=200,
+                    headers={},
+                    body=b'',
+                    content='echo:hello',
+                )
+
+        import python_scripts.server_fastapi as sf
+
+        sf._service = GeminiLegacyService()
+        client = TestClient(app)
+        resp = client.post(
+            '/chat/completions',
+            json={'provider': 'gemini', 'model': 'gemini-flash-lite-latest', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['actual_model'], 'gemini-actual-model')
+        self.assertEqual(resp.json()['content'], 'echo:hello')
 
     def test_openai_chat_completion_returns_openai_style_error_when_model_missing(self) -> None:
         client = TestClient(app)

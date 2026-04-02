@@ -12,6 +12,7 @@
   - `GET /v1/models`
   - `POST /v1/chat/completions`
 - `GET /v1/models` now returns only `free-proxy/auto`
+- `/chat/completions` is a UI debug route and should not be used as the public integration target
 
 ## OpenAI / Python SDK
 
@@ -101,3 +102,9 @@ NO_PROXY=127.0.0.1,localhost
 or temporarily clear proxy variables before validating localhost SSE.
 
 Otherwise tools like `curl` or `opencode` may go through a local proxy, receive injected keep-alive headers, and look like the stream never finished even when the relay already sent `data: [DONE]` and closed correctly.
+
+## Beginner Notes
+
+- Start with `free-proxy/auto` if you do not know which model to pick.
+- Longcat is usually the easiest first try.
+- If Gemini fails, try the Gemini model listed in the README and verify once first.

@@ -512,10 +512,8 @@ class ProxyService:
                 return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=None, stream_chunks=stream_iter)
             return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=body)
 
-        if upstream_stream:
-            text = ''
-        else:
-            text = body.decode('utf-8', errors='ignore')
+        error_body = b''.join(bytes(chunk) for chunk in stream_iter if chunk) if upstream_stream else body
+        text = error_body.decode('utf-8', errors='ignore')
         failure = classify_error(status, text)
         upsert_health(provider_name, normalized_model_id, False, reason=failure.category, path=self.health_path)
         if self.debug_log is not None:
@@ -534,7 +532,7 @@ class ProxyService:
             model=normalized_model_id,
             status=status,
             headers=headers,
-            body=b'',
+            body=error_body if upstream_stream else b'',
             error=text or f'upstream status {status}',
             category=failure.category,
             suggestion=remediation_suggestion(failure.category, provider_name),

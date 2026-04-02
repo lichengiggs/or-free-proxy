@@ -16,6 +16,7 @@ This project is best for:
 - One stable model alias: `free-proxy/auto`
 - Automatic provider fallback when one model fails
 - A local web page for API key setup, so you do not need to edit config files by hand
+- Typical quota-friendly options: Longcat is usually the easiest start, with Gemini / Mistral / GitHub Models / SambaNova as backups
 
 ## Stable public surface
 
@@ -24,6 +25,7 @@ This project is best for:
 - The only public model alias is `free-proxy/auto`
 - Legacy `coding` inputs are still recognized, but they now return HTTP 400 with `code="model_deprecated"`
 - The model you pick in the web page is stored locally in `data/preferred-model.json` and becomes the first preference for `free-proxy/auto`
+- `/chat/completions` is only a web debug route, not the main public API
 
 ## Install free-proxy
 
@@ -128,6 +130,10 @@ Make sure the service is still running, then refresh the page.
 ### No model is available
 
 Try another recommended model first.
+
+### Gemini is configured but chat fails
+
+Click verify once first. If it still fails, try the Gemini model listed in the table above.
 
 ### Where are API keys stored?
 

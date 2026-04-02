@@ -58,7 +58,7 @@ data: [DONE]
 
 **Response (non-stream)**: `200 OK`
 ```json
-{"ok": true, "provider": "longcat", "model": "LongCat-Flash", "actual_model": "LongCat-Flash", "content": "..."}
+{"ok": true, "provider": "longcat", "model": "LongCat-Flash", "content": "..."}
 ```
 
 **Response (stream)**: `200 OK`, `Content-Type: text/event-stream`

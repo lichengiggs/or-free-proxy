@@ -73,7 +73,7 @@
 
 ### 3.6 HTTP Server
 
-- 文件：`python_scripts/server.py`
+- 文件：`python_scripts/server_fastapi.py`
 - 职责：
   - 路由
   - 请求解析
@@ -112,7 +112,14 @@ npx tsc --noEmit
 - 约束：不打印 API key、prompt 原文、message 内容、完整响应体
 - 适用场景：远程用户无法稳定复现，只能贴终端日志
 
-## 8. 本地流式验收注意事项
+## 8. 对外文档约束
+
+- 对外文档只保留 `GET /v1/models` 和 `POST /v1/chat/completions`
+- 稳定模型别名只保留 `free-proxy/auto`
+- `coding` 只作为历史兼容说明，不作为推荐写法
+- `/chat/completions` 只用于网页调试，不写成对外主接口
+
+## 9. 本地流式验收注意事项
 
 - 验证 `127.0.0.1` 流式链路前，先检查 shell 里的 `http_proxy` / `https_proxy`
 - 如存在代理，必须设置 `NO_PROXY=127.0.0.1,localhost` 或临时清空代理变量
