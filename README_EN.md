@@ -22,10 +22,6 @@ This project is best for:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- The only public model alias is `free-proxy/auto`
-- Legacy `coding` inputs are still recognized, but they now return HTTP 400 with `code="model_deprecated"`
-- The model you pick in the web page is stored locally in `data/preferred-model.json` and becomes the first preference for `free-proxy/auto`
-- `/chat/completions` is only a web debug route, not the main public API
 
 ## Install free-proxy
 
@@ -131,17 +127,9 @@ Make sure the service is still running, then refresh the page.
 
 Try another recommended model first.
 
-### Gemini is configured but chat fails
-
-Click verify once first. If it still fails, try the Gemini model listed in the table above.
-
 ### Where are API keys stored?
 
 They are stored in the project root `.env` file and are not committed to GitHub.
-
-## Thanks
-
-This project tries to keep the hard parts behind the scenes so beginners can get started quickly.
 
 ## License
 

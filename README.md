@@ -22,10 +22,6 @@
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- 公开模型只保留：`free-proxy/auto`
-- 旧 `coding` 输入仍会被识别，但统一返回 HTTP 400，错误码 `model_deprecated`
-- 用户在页面里选中的模型偏好会写入本地 `data/preferred-model.json`，并优先影响 `free-proxy/auto`
-- `/chat/completions` 只作为网页调试入口，不是对外主接口
 
 ## 安装 free-proxy
 
@@ -151,17 +147,9 @@ opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly O
 
 先换一个推荐模型再试。
 
-### Gemini 能配好但聊天失败
-
-先点一次“探测”。如果还是失败，换成上面推荐表里的 Gemini 模型再试。
-
 ### API Key 存在哪里
 
 保存在项目根目录的 `.env` 文件里，不会提交到 GitHub。
-
-## 致敬
-
-这个项目参考并兼容了很多现成工作流，尽量把复杂度藏在后面，让小白能先用起来。
 
 ## License
 
