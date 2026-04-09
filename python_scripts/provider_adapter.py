@@ -115,11 +115,11 @@ class ProviderAdapter:
     def list_models(self) -> list[str]:
         status, _, data = self._request_json('GET', '/models', query=get_provider_required_query(self.provider.name))
         if status >= 400:
-            if self.provider.name in {'github', 'groq', 'longcat', 'nvidia'}:
+            if self.provider.name in {'github', 'groq', 'longcat', 'nvidia', 'ofox'}:
                 return get_provider_model_hints(self.provider.name)
             self._raise_http_error(status, data, '获取模型失败')
 
-        if self.provider.name in {'github', 'groq', 'longcat', 'nvidia'} and not self._has_model_items(data):
+        if self.provider.name in {'github', 'groq', 'longcat', 'nvidia', 'ofox'} and not self._has_model_items(data):
             return get_provider_model_hints(self.provider.name)
 
         items = self._extract_model_items(data)
@@ -129,6 +129,8 @@ class ProviderAdapter:
             if not isinstance(raw_model_id, str) or not raw_model_id.strip():
                 continue
             if self.provider.name == 'openrouter' and not self._is_openrouter_free_model(item, raw_model_id):
+                continue
+            if self.provider.name == 'ofox' and not raw_model_id.endswith(':free'):
                 continue
             if self.provider.name == 'gemini' and not self._is_supported_gemini_text_model(item, raw_model_id):
                 continue

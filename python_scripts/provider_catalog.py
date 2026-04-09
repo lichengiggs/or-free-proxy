@@ -48,6 +48,13 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         },
     ),
     ProviderMeta(
+        'ofox',
+        'https://api.ofox.ai/v1',
+        'OFOX_API_KEY',
+        'openai',
+        model_hints=('z-ai/glm-4.7-flash:free',),
+    ),
+    ProviderMeta(
         'gemini',
         'https://generativelanguage.googleapis.com/v1beta',
         'GEMINI_API_KEY',

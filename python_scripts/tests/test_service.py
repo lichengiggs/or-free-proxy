@@ -334,6 +334,7 @@ class ServiceTests(unittest.TestCase):
             'OPENROUTER_API_KEY',
             'LONGCAT_API_KEY',
             'GEMINI_API_KEY',
+            'OFOX_API_KEY',
             'SAMBANOVA_API_KEY',
         ]
         self.old_values = {key: os.environ.get(key) for key in self.env_keys}
@@ -471,6 +472,15 @@ class ServiceTests(unittest.TestCase):
 
             recommended = service.recommended_models('openrouter')
             self.assertTrue(len(recommended) >= 1)
+
+    def test_ofox_recommended_models_fall_back_to_single_free_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / '.env'
+            service = self.make_service(AuthFailTransport(), dotenv_path=env_path)
+            service.save_provider_key('ofox', 'sk-of-example-123456')
+
+            recommended = service.recommended_models('ofox')
+            self.assertEqual(recommended, ['z-ai/glm-4.7-flash:free'])
 
     def test_verify_provider_key_returns_error_category(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

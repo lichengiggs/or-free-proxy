@@ -372,6 +372,46 @@ class ClientTests(unittest.TestCase):
         )
         self.assertEqual(adapter.chat_text('LongCat-Flash-Chat', 'ok'), 'ok')
 
+    def test_ofox_only_keeps_free_suffix_models(self) -> None:
+        provider = get_provider('ofox')
+        transport = FakeTransport({
+            ('GET', 'https://api.ofox.ai/v1/models'): (
+                200,
+                {},
+                json.dumps({'data': [
+                    {'id': 'z-ai/glm-4.7-flash:free'},
+                    {'id': 'z-ai/glm-4.7'},
+                ]}).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['z-ai/glm-4.7-flash:free'])
+
+    def test_ofox_model_hint_fallback_on_list_error(self) -> None:
+        provider = get_provider('ofox')
+        transport = FakeTransport({
+            ('GET', 'https://api.ofox.ai/v1/models'): (503, {}, json.dumps({'error': {'message': 'unavailable'}}).encode()),
+            ('POST', 'https://api.ofox.ai/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['z-ai/glm-4.7-flash:free'])
+        self.assertEqual(adapter.chat_text('z-ai/glm-4.7-flash:free', 'ok'), 'ok')
+
+    def test_ofox_falls_back_to_hint_when_models_response_has_no_free_items(self) -> None:
+        provider = get_provider('ofox')
+        transport = FakeTransport({
+            ('GET', 'https://api.ofox.ai/v1/models'): (
+                200,
+                {},
+                json.dumps({'data': [
+                    {'id': 'z-ai/glm-4.7'},
+                    {'id': 'z-ai/glm-4.7-pro'},
+                ]}).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['z-ai/glm-4.7-flash:free'])
+
     def test_gemini_normalizes_models_and_chat_text(self) -> None:
         provider = get_provider('gemini')
         transport = FakeTransport({

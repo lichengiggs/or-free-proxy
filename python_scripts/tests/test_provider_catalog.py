@@ -10,11 +10,18 @@ class ProviderCatalogTests(unittest.TestCase):
     def tearDown(self) -> None:
         os.environ.pop('LONGCAT_API_KEY', None)
         os.environ.pop('GEMINI_API_KEY', None)
+        os.environ.pop('OFOX_API_KEY', None)
 
     def test_get_provider_returns_catalog_item(self) -> None:
         provider = get_provider('openrouter')
         self.assertEqual(provider.name, 'openrouter')
         self.assertEqual(provider.api_key_env, 'OPENROUTER_API_KEY')
+
+    def test_get_provider_returns_ofox_catalog_item(self) -> None:
+        provider = get_provider('ofox')
+        self.assertEqual(provider.name, 'ofox')
+        self.assertEqual(provider.base_url, 'https://api.ofox.ai/v1')
+        self.assertEqual(provider.api_key_env, 'OFOX_API_KEY')
 
     def test_list_providers_keeps_declared_order(self) -> None:
         names = [item.name for item in list_providers()]
